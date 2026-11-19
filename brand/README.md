@@ -11,6 +11,9 @@ hour; the lime facet is the decision. Light falls from the top left.
 | `svg/ratinole-icon.svg`, `png/ratinole-icon-512.png` | Flat app icon: anywhere effects would be lost |
 | `svg/ratinole-icon-small.svg` | Flat icon drawn bigger with wider seams, for 16 to 48 px (favicon) |
 | `svg/ratinole-avatar.svg`, `png/ratinole-avatar-1000.png` | Square profile picture for X, Telegram, Discord (safe inside a circle crop) |
+| `svg/ratinole-icon-black.svg`, `png/ratinole-icon-black-2048.png` | Premium crystal on a plain black tile, no glow (as on the website) |
+| `svg/ratinole-avatar-black.svg`, `png/ratinole-avatar-black-2048.png` | Premium crystal on a plain black square, for profile pictures |
+| `svg/ratinole-logo-black.svg`, `png/ratinole-logo-black-3000.png` | Crystal and name on a plain black background |
 | `svg/ratinole-crystal.svg`, `png/ratinole-crystal-1024.png` | The crystal on its own, transparent, for dark backgrounds |
 | `svg/ratinole-crystal-flat.svg` | The same without gradients |
 | `svg/ratinole-crystal-black.svg`, `svg/ratinole-crystal-white.svg` (+ PNG) | One colour, for print, stamps and watermarks |
