@@ -18,6 +18,7 @@ import {
   upDown,
   withoutLeadingAction,
 } from "../../lib/format";
+import { BrandMark, BrandWordmark } from "../Brand";
 import { Stage } from "./Stage";
 import { TapeBody } from "./Tape";
 import { ThinkTabs } from "./ThinkTabs";
@@ -26,9 +27,9 @@ import { ThinkTabs } from "./ThinkTabs";
 
 export function Logo({ href = "/" }: { href?: string }) {
   return (
-    <Link className="logo" href={href}>
-      <i />
-      {BRAND_NAME}
+    <Link className="logo" href={href} aria-label={BRAND_NAME}>
+      <BrandMark />
+      <BrandWordmark />
     </Link>
   );
 }

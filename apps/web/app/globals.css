@@ -31,9 +31,9 @@ mark{background:linear-gradient(transparent 12%,var(--mark) 12%,var(--mark) 88%,
 .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
 .top{position:sticky;top:0;z-index:20;background:rgba(243,241,236,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .top .wrap{display:flex;align-items:center;gap:32px;height:84px}
-.logo{font-family:var(--display);font-weight:800;font-size:28px;letter-spacing:-.04em;display:flex;align-items:center;gap:9px;text-decoration:none}
-.logo i{width:24px;height:24px;border-radius:7px;background:var(--ink);position:relative;display:block}
-.logo i::after{content:"";position:absolute;left:5px;right:5px;top:9px;height:5px;background:var(--mark);border-radius:1px}
+.logo{font-size:28px;display:flex;align-items:center;gap:.34em;text-decoration:none;color:var(--ink)}
+.logo .bmark{width:1.1em;height:1.1em;flex:none;display:block}
+.logo .bword{height:.74em;width:auto;flex:none;display:block}
 .top nav{display:flex;gap:30px;margin-left:28px;margin-right:auto;font-weight:500;font-size:17px}
 .top nav a{text-decoration:none;color:var(--ink2)}
 .top nav a:hover{color:var(--ink)}

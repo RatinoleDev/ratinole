@@ -18,6 +18,7 @@ packages/brain  Plan/Decision types, intake validation, regime, evidence, guard,
 packages/config Brand, chain, markets, paper settings, API response types
 packages/db     Prisma schema and client (PostgreSQL)
 docs/           Data sources, deployment guide
+brand/          Logo files (SVG, PNG), colours and usage rules
 deploy/         Nginx site config
 scripts/        Database backup and health check
 ```

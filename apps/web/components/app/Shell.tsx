@@ -3,6 +3,7 @@
 import { BRAND_NAME } from "@rationale/config";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandMark, BrandWordmark } from "../Brand";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { shortAddress } from "../../lib/format";
 import { useToast } from "../Toast";
@@ -75,9 +76,9 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div id="app">
       <aside className="rail">
-        <Link className="logo" href="/">
-          <i />
-          {BRAND_NAME}
+        <Link className="logo" href="/" aria-label={BRAND_NAME}>
+          <BrandMark />
+          <BrandWordmark />
         </Link>
         {NAV.map((n) => (
           <Link key={n.href} href={n.href} className={`nav${n.href === active.href ? " on" : ""}`}>

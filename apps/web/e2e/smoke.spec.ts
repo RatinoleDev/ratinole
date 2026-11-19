@@ -87,6 +87,8 @@ test("landing shows honest empty states when there is no data", async ({ page })
 test("has icons, link previews, robots, sitemap and legal pages", async ({ page, request }) => {
   await page.goto("/");
   await expect(page).toHaveTitle(/^Ratinole\./);
+  // The logo is artwork; the link still carries the name for screen readers.
+  await expect(page.getByRole("link", { name: "Ratinole" }).first().locator("svg.bmark")).toBeVisible();
   await expect(page.locator('link[rel="icon"]').first()).toHaveAttribute("href", /icon|favicon/);
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /^https:\/\/ratinole\.trade\/opengraph-image/);
   await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
