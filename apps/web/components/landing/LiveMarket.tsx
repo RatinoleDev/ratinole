@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The market band at the top of the landing page. Prices and 24-hour change
+ * The live market strip at the top of the landing page. Prices and 24-hour change
  * update live from the API's event stream (which relays the engine's Binance
  * feed); regime, RSI, funding and volatility are the engine's hourly reading.
  * If the stream is unavailable it polls every 5 seconds, and with no live data
@@ -28,7 +28,10 @@ export function LiveMarketBand({ markets, initial }: { markets: MarketDTO[]; ini
   const prev = useRef<Record<string, number>>({});
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  const hasMarkets = markets.length > 0;
   useEffect(() => {
+    // No market reading yet means no band: do not open a stream for it.
+    if (!hasMarkets) return;
     setNow(Date.now());
     let lastMessage = Date.now();
     let poll: ReturnType<typeof setInterval> | null = null;
@@ -69,7 +72,7 @@ export function LiveMarketBand({ markets, initial }: { markets: MarketDTO[]; ini
       if (poll) clearInterval(poll);
       clearInterval(watchdog);
     };
-  }, []);
+  }, [hasMarkets]);
 
   // Flash the price green or red when it moves. Each market has its own timer,
   // so a tick on one market never keeps the other one coloured.
@@ -95,55 +98,41 @@ export function LiveMarketBand({ markets, initial }: { markets: MarketDTO[]; ini
   const readAt = markets.map((m) => m.asOf).sort().at(-1)!;
 
   return (
-    <section className="mband topband" id="market" aria-label="The market right now">
-      <div className="wrap">
-        <div className="mhead">
+    <section className="mband strip3d" id="market" aria-label="The market right now">
+      <div className="wrap stripin">
+        {markets.map((m) => {
+          const t = ticks[m.market];
+          const live = t && now - t.t < STALE_MS ? t : null;
+          const price = live?.price ?? m.price;
+          const change = live?.change24Pct ?? m.change24Pct;
+          const series = live ? [...m.closes7d, live.price] : m.closes7d;
+          return (
+            <article className="mcard" key={m.market}>
+              <div className="mtop">
+                <span className="msym">{m.marketLabel}</span>
+                {live ? <span className="livechip">Live</span> : null}
+              </div>
+              <div className="mrow">
+                <span className={`mpx num${flash[m.market] ? ` flash-${flash[m.market]}` : ""}`}>{priceText(price)}</span>
+                <span className={`mchg ${change < 0 ? "neg" : "pos"}`}>{pct(change, 2)}</span>
+              </div>
+              <p className="mmeta">
+                <span>
+                  {regimeText(m)} · RSI {m.rsi != null ? m.rsi.toFixed(1) : "—"}
+                </span>
+                <span>Funding {fundingText(m.funding8hPct)}</span>
+              </p>
+              <div className="mchart">
+                <Sparkline values={series} id={m.market} height={44} />
+              </div>
+            </article>
+          );
+        })}
+        <p className="mnote">
           <LiveDot />
-          <h2>The market right now</h2>
-          <small>
-            {isLive ? `Live prices from Binance · updated ${clock(Math.max(...liveTimes))} UTC` : "Prices from the latest hourly reading"} · regime,
-            RSI and funding read hourly ({new Date(readAt).toISOString().slice(11, 16)} UTC)
-          </small>
-        </div>
-        <div className="mgrid">
-          {markets.map((m) => {
-            const t = ticks[m.market];
-            const live = t && now - t.t < STALE_MS ? t : null;
-            const price = live?.price ?? m.price;
-            const change = live?.change24Pct ?? m.change24Pct;
-            const series = live ? [...m.closes7d, live.price] : m.closes7d;
-            return (
-              <article className="mcard" key={m.market}>
-                <div>
-                  <div className="mtop">
-                    <span className="msym">{m.marketLabel}</span>
-                    {live ? <span className="livechip">Live</span> : null}
-                  </div>
-                  <div className={`mpx num${flash[m.market] ? ` flash-${flash[m.market]}` : ""}`}>{priceText(price)}</div>
-                  <div className={`mchg ${change < 0 ? "neg" : "pos"}`}>{pct(change, 2)} in 24 hours</div>
-                </div>
-                <div className="mchart">
-                  <Sparkline values={series} id={m.market} />
-                  <small>7 days, hourly{live ? ", live price at the end" : ""}</small>
-                </div>
-                <div className="mchips">
-                  <span>
-                    <em>Regime</em> <b>{regimeText(m)}</b>
-                  </span>
-                  <span>
-                    <em>RSI</em> <b>{m.rsi != null ? m.rsi.toFixed(1) : "—"}</b>
-                  </span>
-                  <span>
-                    <em>Funding</em> <b>{fundingText(m.funding8hPct)}</b>
-                  </span>
-                  <span>
-                    <em>Daily move</em> <b>{m.dailyVolPct.toFixed(1)}%</b>
-                  </span>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+          {isLive ? `Live from Binance, ${clock(Math.max(...liveTimes))} UTC` : "Latest hourly reading"}. Regime, RSI and funding
+          read hourly ({new Date(readAt).toISOString().slice(11, 16)} UTC). Daily move {markets.map((m) => `${m.market} ${m.dailyVolPct.toFixed(1)}%`).join(", ")}.
+        </p>
       </div>
     </section>
   );

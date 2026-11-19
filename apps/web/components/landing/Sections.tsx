@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
 import { PlanRows } from "../PlanRow";
-import { barStyle, cssVars } from "../../lib/css";
+import { barStyle } from "../../lib/css";
 import { LiveDot, fundingText, regimeText } from "./marketUi";
 import {
   actionLabel,
@@ -14,12 +14,11 @@ import {
   pct,
   regimeLabel,
   signed,
-  truncate,
   upDown,
   withoutLeadingAction,
 } from "../../lib/format";
 import { BrandMark, BrandWordmark } from "../Brand";
-import { Stage } from "./Stage";
+import { Crystal3D } from "./Crystal3D";
 import { TapeBody } from "./Tape";
 import { ThinkTabs } from "./ThinkTabs";
 
@@ -86,86 +85,20 @@ export function Nav({ base = "" }: { base?: string }) {
 
 /* ---------- hero ---------- */
 
-function heroFloats(d: DecisionDTO | null, markets: MarketDTO[]): ReactNode[] {
-  const eth = markets.find((m) => m.market === "ETH") ?? markets[0];
-  const btc = markets.find((m) => m.market === "BTC");
-  const regimePill = (m: MarketDTO) => (m.regime === "stressed" ? "loss" : m.direction === "down" ? "loss" : m.direction === "up" ? "gain" : "plain");
-  const out: ReactNode[] = [];
-  if (eth) {
-    out.push(
-      <>
-        <span className={`pill ${regimePill(eth)}`}>{eth.market}</span> {regimeText(eth)}, read hourly
-      </>,
-    );
-  }
-  if (d) {
-    out.push(
-      <>
-        <b>{d.confidence}%</b> confident to {actionLabel(d.action).toLowerCase()}
-        <s style={cssVars({ "--p": `${d.confidence}%` })} />
-      </>,
-    );
-  } else if (btc) {
-    out.push(
-      <>
-        <span className={`pill ${regimePill(btc)}`}>{btc.market}</span> {regimeText(btc)}, read hourly
-      </>,
-    );
-  }
-  if (eth?.funding8hPct != null) {
-    out.push(
-      <>
-        <span className="pill plain">Funding</span> {fundingText(eth.funding8hPct)} / 8h
-      </>,
-    );
-  }
-  if (d) {
-    const vetoes = d.guard.filter((g) => !g.pass).length;
-    out.push(
-      <>
-        <span className={`pill ${vetoes ? "loss" : "gain"}`}>{vetoes ? "Veto" : "Guard"}</span>{" "}
-        {vetoes ? truncate(d.guard.find((g) => !g.pass)!.check, 28) : `${d.guard.length} of ${d.guard.length} checks pass`}
-      </>,
-    );
-  }
-  if (eth?.rsi != null) {
-    out.push(
-      <>
-        <span className="pill plain">RSI</span> {eth.rsi.toFixed(1)} on {eth.market}
-      </>,
-    );
-  }
-  const generic: ReactNode[] = [
-    <>
-      <span className="pill plain">Sense</span> Gathers the evidence
-    </>,
-    <>
-      <span className="pill plain">Weigh</span> Scores for and against
-    </>,
-    <>
-      <span className="pill plain">Explain</span> Writes down why
-    </>,
-    <>
-      <span className="pill plain">Regime</span> Reads the market first
-    </>,
-    <>
-      <span className="pill plain">Guard</span> Can veto any trade
-    </>,
-  ];
-  while (out.length < 5) out.push(generic[out.length]!);
-  return out.slice(0, 5);
+function utcTime(iso: string): string {
+  return `${new Date(iso).toISOString().slice(11, 16)} UTC`;
 }
 
 export function Hero({ latest, decisions, markets }: { latest: DecisionDTO | null; decisions: DecisionDTO[]; markets: MarketDTO[] }) {
+  const eth = markets.find((m) => m.market === "ETH") ?? markets[0];
   return (
-    <section className="hero">
-      <div className="wrap">
-        <div className="hero-copy">
+    <section className="hero3d">
+      <div className="wrap h3">
+        <div className="h3copy">
           {markets.length ? (
             <a className="news" href="#decision">
               <b>Live</b>
-              <LiveDot />
-              Agents read {markets.map((m) => m.market).join(" and ")} hourly
+              Agents read {markets.map((m) => m.market).join(" and ")} every hour
             </a>
           ) : (
             <a className="news" href="#plans">
@@ -175,22 +108,49 @@ export function Hero({ latest, decisions, markets }: { latest: DecisionDTO | nul
           <h1>
             Agents that think.
             <br />
-            Money that stays yours.
+            <em>Money that stays yours.</em>
           </h1>
           <p className="lede">
             Describe a strategy in a sentence. Your agent reads the market every hour, weighs the evidence for and
             against, and writes down why it acted or waited.
           </p>
           <div className="cta">
-            <Link className="btn blue xl" href="/app/studio">
-              Build your agent
+            <Link className="btn lime xl" href="/app/studio">
+              Build your agent <span aria-hidden="true">→</span>
             </Link>
             <a className="btn ghost xl" href="#decision">
               {latest ? "Read a live decision" : "Read a decision"}
             </a>
           </div>
+          <ul className="trust">
+            <li>Virtual money only</li>
+            <li>Decides every hour</li>
+            <li>Every decision explained</li>
+          </ul>
         </div>
-        <Stage floats={heroFloats(latest, markets)} />
+        <div className="h3stage">
+          <Crystal3D />
+          {latest ? (
+            <a className="glass gc1" href="#decision">
+              <span className="tag">Latest decision</span>
+              <b>
+                {latest.agentName} · {actionLabel(latest.action)}
+              </b>
+              <small>
+                {latest.marketLabel} · {utcTime(latest.hour)} · confidence {latest.confidence}
+              </small>
+            </a>
+          ) : null}
+          {eth ? (
+            <div className="glass gc2">
+              <span className="tag">{eth.market} regime</span>
+              <b>{regimeText(eth)}</b>
+              <small>
+                RSI {eth.rsi != null ? eth.rsi.toFixed(1) : "—"} · read {utcTime(eth.asOf)}
+              </small>
+            </div>
+          ) : null}
+        </div>
       </div>
       <Ticker decisions={decisions} markets={markets} />
     </section>

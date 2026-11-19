@@ -24,7 +24,7 @@ export function Chart({ strategy, holding, splitIndex, label, className = "chart
     return (
       <svg className={className} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={label}>
         {grid.map((y) => (
-          <line key={y} x1="0" x2={W} y1={y} y2={y} stroke="#E6E2D9" strokeWidth="1" />
+          <line key={y} x1="0" x2={W} y1={y} y2={y} className="c-grid" stroke="#E6E2D9" strokeWidth="1" />
         ))}
       </svg>
     );
@@ -39,13 +39,14 @@ export function Chart({ strategy, holding, splitIndex, label, className = "chart
   return (
     <svg className={className} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={label}>
       {grid.map((yy) => (
-        <line key={yy} x1="0" x2={W} y1={yy} y2={yy} stroke="#E6E2D9" strokeWidth="1" />
+        <line key={yy} x1="0" x2={W} y1={yy} y2={yy} className="c-grid" stroke="#E6E2D9" strokeWidth="1" />
       ))}
-      {sx !== null && <rect x={sx} y="0" width={W - sx} height={H} fill="#CDF545" opacity=".32" />}
+      {sx !== null && <rect x={sx} y="0" width={W - sx} height={H} className="c-split" fill="#CDF545" opacity=".32" />}
       {holding.length > 1 && (
         <path
           d={path(holding)}
           fill="none"
+          className="c-hold"
           stroke="#A29E94"
           strokeWidth="2"
           strokeDasharray="5 5"
@@ -56,6 +57,7 @@ export function Chart({ strategy, holding, splitIndex, label, className = "chart
         <path
           d={path(strategy)}
           fill="none"
+          className="c-strat"
           stroke="#0B0B0C"
           strokeWidth="3"
           strokeLinejoin="round"
