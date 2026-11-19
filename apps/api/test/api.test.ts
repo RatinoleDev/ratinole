@@ -371,3 +371,49 @@ describe.skipIf(!hasDb)("health without redis", () => {
     dead.disconnect();
   });
 });
+
+describe.skipIf(!hasDb)("live prices", () => {
+  it("serves the latest ticks and streams new ones as server-sent events", async () => {
+    const { Redis } = await import("ioredis");
+    const r = new Redis("redis://localhost:6379/15");
+    await r.flushdb();
+    const app = await makeApp({ redis: r }).app;
+    const tick = (market: string, price: number) => ({ market, price, open24h: price, change24Pct: 0, high24h: price, low24h: price, t: Date.now(), source: "binance" });
+    await r.set("market:live:ETH", JSON.stringify(tick("ETH", 1807.34)), "EX", 90);
+    expect((await app.inject({ method: "GET", url: "/api/public/market/live" })).json()).toEqual([expect.objectContaining({ market: "ETH", price: 1807.34 })]);
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as { port: number };
+    const ctrl = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${port}/api/public/market/stream`, { signal: ctrl.signal });
+    expect(res.headers.get("content-type")).toMatch(/text\/event-stream/);
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const readUntil = async (needle: string) => {
+      const deadline = Date.now() + 5000;
+      while (!text.includes(needle) && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value);
+      }
+    };
+    await readUntil('"price":1807.34');
+    expect(text).toContain("retry: 3000");
+    // A tick published by the engine reaches the open stream.
+    await new Promise((r) => setTimeout(r, 200));
+    await r.publish("market:live", JSON.stringify(tick("BTC", 63948)));
+    await readUntil('"price":63948');
+    expect(text).toContain('"market":"BTC"');
+    // Closing the server ends open streams instead of waiting for browsers to leave.
+    const started = Date.now();
+    await app.close();
+    let done = false;
+    while (!done && Date.now() - started < 3000) done = (await reader.read()).done;
+    expect(done).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2000);
+    ctrl.abort();
+    await r.quit();
+  });
+});

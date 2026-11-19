@@ -1,0 +1,150 @@
+"use client";
+
+/**
+ * The market band at the top of the landing page. Prices and 24-hour change
+ * update live from the API's event stream (which relays the engine's Binance
+ * feed); regime, RSI, funding and volatility are the engine's hourly reading.
+ * If the stream is unavailable it polls every 5 seconds, and with no live data
+ * at all it shows the hourly reading.
+ */
+import type { LiveTickDTO, MarketDTO } from "@rationale/config";
+import { useEffect, useRef, useState } from "react";
+import { pct } from "../../lib/format";
+import { LiveDot, Sparkline, fundingText, priceText, regimeText } from "./marketUi";
+
+/** A tick older than this is not shown as live. */
+const STALE_MS = 90_000;
+
+function clock(ms: number): string {
+  return new Date(ms).toISOString().slice(11, 19);
+}
+
+export function LiveMarketBand({ markets, initial }: { markets: MarketDTO[]; initial: LiveTickDTO[] }) {
+  const [ticks, setTicks] = useState<Record<string, LiveTickDTO>>(() => Object.fromEntries(initial.map((t) => [t.market, t])));
+  const [flash, setFlash] = useState<Record<string, "up" | "down" | undefined>>({});
+  // Start from the newest stored tick so the server and the browser render the
+  // same thing; the effect below switches to the real clock right away.
+  const [now, setNow] = useState(() => Math.max(0, ...initial.map((t) => t.t)));
+  const prev = useRef<Record<string, number>>({});
+  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    setNow(Date.now());
+    let lastMessage = Date.now();
+    let poll: ReturnType<typeof setInterval> | null = null;
+    const accept = (t: LiveTickDTO) => {
+      lastMessage = Date.now();
+      setTicks((cur) => (cur[t.market] && cur[t.market]!.t >= t.t ? cur : { ...cur, [t.market]: t }));
+    };
+    const startPolling = () => {
+      if (poll) return;
+      const run = () =>
+        fetch("/api/public/market/live")
+          .then((r) => (r.ok ? r.json() : []))
+          .then((rows: LiveTickDTO[]) => rows.forEach(accept))
+          .catch(() => undefined);
+      void run();
+      poll = setInterval(run, 5000);
+    };
+    let es: EventSource | null = null;
+    if ("EventSource" in window) {
+      es = new EventSource("/api/public/market/stream");
+      es.onmessage = (e) => {
+        try {
+          accept(JSON.parse(e.data) as LiveTickDTO);
+        } catch {
+          /* ignore malformed */
+        }
+      };
+    } else {
+      startPolling();
+    }
+    // If the stream goes quiet (proxy, network), fall back to polling.
+    const watchdog = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() - lastMessage > 15_000) startPolling();
+    }, 1000);
+    return () => {
+      es?.close();
+      if (poll) clearInterval(poll);
+      clearInterval(watchdog);
+    };
+  }, []);
+
+  // Flash the price green or red when it moves. Each market has its own timer,
+  // so a tick on one market never keeps the other one coloured.
+  useEffect(() => {
+    for (const [m, t] of Object.entries(ticks)) {
+      const before = prev.current[m];
+      prev.current[m] = t.price;
+      if (before == null || t.price === before) continue;
+      const dir = t.price > before ? "up" : "down";
+      setFlash((f) => ({ ...f, [m]: dir }));
+      clearTimeout(timers.current[m]);
+      timers.current[m] = setTimeout(() => setFlash((f) => ({ ...f, [m]: undefined })), 450);
+    }
+  }, [ticks]);
+  useEffect(() => {
+    const all = timers.current;
+    return () => Object.values(all).forEach(clearTimeout);
+  }, []);
+
+  if (markets.length === 0) return null;
+  const liveTimes = Object.values(ticks).filter((t) => now - t.t < STALE_MS).map((t) => t.t);
+  const isLive = liveTimes.length > 0;
+  const readAt = markets.map((m) => m.asOf).sort().at(-1)!;
+
+  return (
+    <section className="mband topband" id="market" aria-label="The market right now">
+      <div className="wrap">
+        <div className="mhead">
+          <LiveDot />
+          <h2>The market right now</h2>
+          <small>
+            {isLive ? `Live prices from Binance · updated ${clock(Math.max(...liveTimes))} UTC` : "Prices from the latest hourly reading"} · regime,
+            RSI and funding read hourly ({new Date(readAt).toISOString().slice(11, 16)} UTC)
+          </small>
+        </div>
+        <div className="mgrid">
+          {markets.map((m) => {
+            const t = ticks[m.market];
+            const live = t && now - t.t < STALE_MS ? t : null;
+            const price = live?.price ?? m.price;
+            const change = live?.change24Pct ?? m.change24Pct;
+            const series = live ? [...m.closes7d, live.price] : m.closes7d;
+            return (
+              <article className="mcard" key={m.market}>
+                <div>
+                  <div className="mtop">
+                    <span className="msym">{m.marketLabel}</span>
+                    {live ? <span className="livechip">Live</span> : null}
+                  </div>
+                  <div className={`mpx num${flash[m.market] ? ` flash-${flash[m.market]}` : ""}`}>{priceText(price)}</div>
+                  <div className={`mchg ${change < 0 ? "neg" : "pos"}`}>{pct(change, 2)} in 24 hours</div>
+                </div>
+                <div className="mchart">
+                  <Sparkline values={series} id={m.market} />
+                  <small>7 days, hourly{live ? ", live price at the end" : ""}</small>
+                </div>
+                <div className="mchips">
+                  <span>
+                    <em>Regime</em> <b>{regimeText(m)}</b>
+                  </span>
+                  <span>
+                    <em>RSI</em> <b>{m.rsi != null ? m.rsi.toFixed(1) : "—"}</b>
+                  </span>
+                  <span>
+                    <em>Funding</em> <b>{fundingText(m.funding8hPct)}</b>
+                  </span>
+                  <span>
+                    <em>Daily move</em> <b>{m.dailyVolPct.toFixed(1)}%</b>
+                  </span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}

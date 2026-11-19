@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
 import { PlanRows } from "../PlanRow";
 import { barStyle, cssVars } from "../../lib/css";
-import { LiveDot, MarketBand, fundingText, regimeText } from "./Live";
+import { LiveDot, fundingText, regimeText } from "./marketUi";
 import {
   actionLabel,
   actionTag,
@@ -93,7 +93,7 @@ function heroFloats(d: DecisionDTO | null, markets: MarketDTO[]): ReactNode[] {
   if (eth) {
     out.push(
       <>
-        <span className={`pill ${regimePill(eth)}`}>{eth.market}</span> {regimeText(eth)} · {pct(eth.change24Pct, 2)} 24h
+        <span className={`pill ${regimePill(eth)}`}>{eth.market}</span> {regimeText(eth)}, read hourly
       </>,
     );
   }
@@ -107,7 +107,7 @@ function heroFloats(d: DecisionDTO | null, markets: MarketDTO[]): ReactNode[] {
   } else if (btc) {
     out.push(
       <>
-        <span className={`pill ${regimePill(btc)}`}>{btc.market}</span> {regimeText(btc)} · {pct(btc.change24Pct, 2)} 24h
+        <span className={`pill ${regimePill(btc)}`}>{btc.market}</span> {regimeText(btc)}, read hourly
       </>,
     );
   }
@@ -191,7 +191,6 @@ export function Hero({ latest, decisions, markets }: { latest: DecisionDTO | nul
         </div>
         <Stage floats={heroFloats(latest, markets)} />
       </div>
-      <MarketBand markets={markets} />
       <Ticker decisions={decisions} markets={markets} />
     </section>
   );
@@ -205,7 +204,7 @@ function Ticker({ decisions, markets }: { decisions: DecisionDTO[]; markets: Mar
       key: `m${m.market}`,
       pill: <i className="pill plain">{m.market}</i>,
       who: regimeText(m),
-      text: `${pct(m.change24Pct, 2)} in 24 hours${m.funding8hPct != null ? `, funding ${fundingText(m.funding8hPct)} per 8 hours` : ""}`,
+      text: `RSI ${m.rsi != null ? m.rsi.toFixed(1) : "—"}${m.funding8hPct != null ? `, funding ${fundingText(m.funding8hPct)} per 8 hours` : ""}`,
     });
   }
   for (const d of decisions.slice(0, 10)) {

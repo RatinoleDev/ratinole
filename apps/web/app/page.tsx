@@ -1,5 +1,6 @@
-import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO, MarketDTO } from "@rationale/config";
+import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO, LiveTickDTO, MarketDTO } from "@rationale/config";
 import { Features } from "../components/landing/Live";
+import { LiveMarketBand } from "../components/landing/LiveMarket";
 import { RevealInit } from "../components/landing/Reveal";
 import {
   Closing,
@@ -19,11 +20,12 @@ import { serverGet } from "../lib/server-api";
 export const revalidate = 30;
 
 export default async function Landing() {
-  const [decisions, example, board, market] = await Promise.all([
+  const [decisions, example, board, market, live] = await Promise.all([
     serverGet<DecisionDTO[]>("/public/decisions?limit=20"),
     serverGet<ExampleDTO>("/public/example"),
     serverGet<LeaderboardRowDTO[]>("/leaderboard"),
     serverGet<MarketDTO[]>("/public/market"),
+    serverGet<LiveTickDTO[]>("/public/market/live"),
   ]);
   const list = Array.isArray(decisions) ? decisions : [];
   const markets = Array.isArray(market) ? market : [];
@@ -32,6 +34,7 @@ export default async function Landing() {
     <div id="landing">
       <RevealInit />
       <Nav />
+      <LiveMarketBand markets={markets} initial={Array.isArray(live) ? live : []} />
       <Hero latest={latest} decisions={list} markets={markets} />
       <Product example={example} />
       <DecisionTape latest={latest} />

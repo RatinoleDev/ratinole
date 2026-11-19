@@ -673,3 +673,38 @@ body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:60;opa
 .mini.tline .tlegend span{display:inline-flex;align-items:center;gap:5px}
 .mini.tline .tlegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
 .mini.tline .tlegend i.plain{background:#D9D5CB}
+
+/* market band at the top of the page: the floating nav sits over it */
+.mband.topband{margin-top:-96px;padding:126px 0 40px}
+.topband .mtop{align-items:center;gap:10px}
+.topband .mchg{display:block;margin-top:6px}
+.topband .mchips{gap:6px}
+.topband .mchips span{font-size:12.5px;padding:5px 10px;white-space:nowrap}
+.mchips em{font-style:normal}
+.livechip{display:inline-flex;align-items:center;gap:6px;font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em;text-transform:uppercase;color:#0B0B0C;background:var(--lime);border-radius:999px;padding:4px 8px;white-space:nowrap}
+.livechip::before{content:"";width:6px;height:6px;border-radius:50%;background:#0B0B0C;animation:blinkdot 1.4s ease-in-out infinite}
+@keyframes blinkdot{50%{opacity:.25}}
+/* the colour jumps on a move and fades back */
+.mpx{transition:color .8s ease-out}
+.mpx.flash-up{color:var(--lime);transition:none}
+.mpx.flash-down{color:#FF7A6E;transition:none}
+@media (max-width:960px){
+  .mband.topband{margin-top:-84px;padding:104px 0 28px}
+  .mband.topband .mhead{margin-bottom:14px}
+  .mband.topband .mhead h2{font-size:22px}
+  .mband.topband .mhead small{font-size:12.5px}
+  .mband.topband .mgrid{grid-template-columns:1fr 1fr;gap:10px}
+  .mband.topband .mcard{padding:14px;gap:8px;border-radius:18px}
+  .mband.topband .mpx{font-size:22px}
+  .mband.topband .msym{font-size:13px}
+  .mband.topband .mtop{gap:6px}
+  .mband.topband .mchg{font-size:12px;margin-top:4px}
+  .mband.topband .livechip{font-size:9.5px;padding:3px 6px;gap:4px}
+  .mband.topband .livechip::before{width:5px;height:5px}
+  .mband.topband .spark{height:48px}
+  .mband.topband .mchart small{display:none}
+  .mband.topband .mchips span{font-size:11.5px;padding:4px 8px}
+  .mband.topband .mchips span:first-child em{display:none}
+  .mband.topband .mchips span:nth-child(n+2){display:none}
+}
+@media (prefers-reduced-motion:reduce){.livechip::before{animation:none}.mpx,.mpx.flash-up,.mpx.flash-down{transition:none}}

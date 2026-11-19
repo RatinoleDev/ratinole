@@ -8,6 +8,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { env } from "./env";
 import { log } from "./log";
 import { hyperliquidFunding } from "./market/funding";
+import { startLivePrices } from "./market/live";
 import { redisConnection } from "./redis";
 import { FreshDataPendingError, hourFloor } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
@@ -51,6 +52,8 @@ async function start() {
     if (!(err instanceof FreshDataPendingError)) log("warn", "job failed", { name: job?.name, id: job?.id, error: err.message });
   });
 
+  const live = startLivePrices(redis);
+
   const beat = () => redis.set("engine:heartbeat", new Date().toISOString()).catch(() => undefined);
   await beat();
   const timer = setInterval(beat, 30_000);
@@ -64,6 +67,7 @@ async function start() {
   const stop = async () => {
     log("info", "engine stopping");
     clearInterval(timer);
+    live.stop();
     await worker.close();
     await queue.close();
     await redis.quit();

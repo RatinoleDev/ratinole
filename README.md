@@ -90,6 +90,13 @@ RSI, funding) that the landing page shows. To store one right away:
 pnpm --filter @rationale/engine tick market
 ```
 
+The market band at the top of the landing page shows live prices. The engine
+keeps one WebSocket open to Binance's public market-data stream and publishes
+each tick through Redis, and the API relays ticks to browsers as server-sent
+events, so a visitor's browser only talks to this site. Live prices are for
+display; agents still decide on closed hourly candles. If the engine is
+stopped, the band falls back to the latest hourly reading after 90 seconds.
+
 To launch the house paper agents (run by the team, labelled "House" on the
 site) so visitors can read real decisions from the first hour:
 
@@ -177,5 +184,5 @@ needed) on the first 60 days and scoring the last 30 days unseen.
 [docs/deploy.md](docs/deploy.md) walks through a VPS install: Postgres, Redis,
 PM2 (`ecosystem.config.cjs`), Nginx with TLS and rate limits
 (`deploy/nginx.conf`), daily backups (`scripts/backup-db.sh`) and a health check
-for cron (`scripts/healthcheck.sh`). Nothing has been deployed. Run exactly one
-engine.
+for cron (`scripts/healthcheck.sh`). Run exactly one engine: it holds the live
+price stream as well as the hourly runs.

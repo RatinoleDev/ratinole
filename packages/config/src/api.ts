@@ -199,6 +199,19 @@ export interface MarketDTO {
   fundingSource: string | null;
 }
 
+/** A live price tick (display only; agents decide on closed hourly candles). */
+export interface LiveTickDTO {
+  market: string;
+  price: number;
+  open24h: number;
+  change24Pct: number;
+  high24h: number;
+  low24h: number;
+  /** Exchange event time, ms since epoch. */
+  t: number;
+  source: "binance";
+}
+
 export interface ExampleDTO {
   sentence: string;
   rows: PlanRowDTO[];

@@ -12,6 +12,8 @@ table, so any decision or backtest can be replayed from stored data.
 | Postgres `Candle` table (last resort) | When both feeds fail | local | – | Closed candles only. A decision for the current hour then holds with a fresh-data veto. |
 | Hyperliquid funding | ETH, BTC hourly funding rates | `POST https://api.hyperliquid.xyz/info` (`fundingHistory`) | none | Hourly settlements, 500 per request, full history, so backtests can use it. Saved in the `FundingRate` table. Each candle carries the rate settled at its close. If the feed fails, agents carry on with price signals and funding rules do not hold. Funding evidence names its source. |
 
+| Binance live stream (display only) | ETH, BTC live price and 24-hour change on the landing page | `wss://data-stream.binance.vision/stream` (`ethusdt@miniTicker`, `btcusdt@miniTicker`) | none | One WebSocket held by the engine; ticks about once a second. Each tick is stored in Redis for 90 seconds (`market:live:ETH`, `market:live:BTC`) and published on the `market:live` channel; the API relays them to browsers at `/api/public/market/stream` (server-sent events) and `/api/public/market/live`. While the socket is down the engine polls `https://data-api.binance.vision/api/v3/ticker/24hr` every 5 seconds. Agents never use these prices: they decide on closed hourly candles. |
+
 Redis caches each feed response for 2 minutes, so all agents on one market
 share one request per hourly run.
 

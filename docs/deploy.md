@@ -104,6 +104,13 @@ Then install the full site with the real domain and reload:
 sed 's/example\.com/your-domain/g' deploy/nginx.conf | sudo tee /etc/nginx/sites-available/rationale >/dev/null && sudo nginx -t && sudo systemctl reload nginx
 ```
 
+The landing page's live prices arrive over server-sent events at
+`/api/public/market/stream`. That needs no extra Nginx block: the API sends
+`X-Accel-Buffering: no`, so Nginx passes each tick straight through, and a
+heartbeat every 15 seconds keeps the connection inside Nginx's default
+60-second read timeout. If the stream cannot connect, the page polls
+`/api/public/market/live` every 5 seconds instead.
+
 `www` redirects to the bare domain, because wallet sign-in is bound to the one
 host in `APP_ORIGIN`. Certbot renews automatically through the same challenge
 path and reloads Nginx after each renewal.
@@ -149,6 +156,13 @@ psql "$DATABASE_URL" -c 'SELECT date_trunc($$hour$$, hour) AS hour, count(*), bo
 
 ```bash
 cd /srv/rationale && git pull && pnpm install --frozen-lockfile && pnpm db:generate && pnpm db:deploy && pnpm --filter @rationale/web build && pm2 reload ecosystem.config.cjs
+```
+
+Reloading restarts the engine, which reconnects the live price stream; its log
+says `live price stream connected` within a few seconds:
+
+```bash
+pm2 logs rationale-engine --lines 50 --nostream | grep "live price"
 ```
 
 After an upgrade that adds agent statistics, recompute them once:
