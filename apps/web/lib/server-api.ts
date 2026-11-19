@@ -1,4 +1,4 @@
-const API = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+const API = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4000";
 
 /**
  * Server-side read of a public endpoint. Returns null on any failure so pages

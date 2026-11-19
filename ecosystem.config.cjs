@@ -25,6 +25,7 @@ module.exports = {
       script: "node_modules/tsx/dist/cli.mjs",
       args: "--env-file=../../.env src/main.ts",
       env: { NODE_ENV: "production" },
+      exec_mode: "fork",
       instances: 1,
       autorestart: true,
     },

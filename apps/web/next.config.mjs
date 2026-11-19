@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+const apiUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4000";
 const rpcOrigin = "https://robinhood.drpc.org";
 
 // Next 14 hydrates with inline scripts, so script-src needs 'unsafe-inline'

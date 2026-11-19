@@ -78,22 +78,28 @@ after a reboot.) Run exactly one engine: it owns the hourly schedule.
 
 ## 5. Nginx and TLS
 
-```bash
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/rationale && sudo ln -s /etc/nginx/sites-available/rationale /etc/nginx/sites-enabled/rationale
-```
-
-Edit the file to use the real domain, comment out the `listen 443` server block
-until the certificate exists, then:
+Two stages, because the full config points at a certificate that does not exist
+yet. First a temporary HTTP-only site that answers the certificate challenge:
 
 ```bash
-sudo nginx -t && sudo systemctl reload nginx
+sudo mkdir -p /var/www/certbot && printf 'server {\n  listen 80;\n  listen [::]:80;\n  server_name example.com www.example.com;\n  location /.well-known/acme-challenge/ { root /var/www/certbot; }\n  location / { return 200 "ok"; }\n}\n' | sudo tee /etc/nginx/sites-available/rationale >/dev/null && sudo ln -sf /etc/nginx/sites-available/rationale /etc/nginx/sites-enabled/rationale && sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl reload nginx
 ```
+
+Get a certificate for both names (use your email for expiry notices):
 
 ```bash
-sudo certbot certonly --webroot -w /var/www/certbot -d example.com
+sudo certbot certonly --webroot -w /var/www/certbot -d example.com -d www.example.com --agree-tos -m you@example.com --no-eff-email --deploy-hook "systemctl reload nginx"
 ```
 
-Restore the 443 block and reload Nginx again.
+Then install the full site with the real domain and reload:
+
+```bash
+sed 's/example\.com/your-domain/g' deploy/nginx.conf | sudo tee /etc/nginx/sites-available/rationale >/dev/null && sudo nginx -t && sudo systemctl reload nginx
+```
+
+`www` redirects to the bare domain, because wallet sign-in is bound to the one
+host in `APP_ORIGIN`. Certbot renews automatically through the same challenge
+path and reloads Nginx after each renewal.
 
 ## 6. Backups and health checks
 
