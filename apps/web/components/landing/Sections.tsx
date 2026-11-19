@@ -1,10 +1,11 @@
-import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO } from "@rationale/config";
-import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY, LEADERBOARD } from "@rationale/config";
+import type { DecisionDTO, ExampleDTO, MarketDTO } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY } from "@rationale/config";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
 import { PlanRows } from "../PlanRow";
 import { barStyle, cssVars } from "../../lib/css";
+import { LiveDot, MarketBand, fundingText, regimeText } from "./Live";
 import {
   actionLabel,
   actionTag,
@@ -46,7 +47,7 @@ function Weights({ d, big = false }: { d: DecisionDTO; big?: boolean }) {
   );
 }
 
-const NOT_COLLECTED = ["Open interest", "Liquidations", "Wallet flow", "Headlines"];
+const COMING_SOURCES = "Open interest, liquidations, large-wallet flows and headlines are being added.";
 
 const REGIME_TEXT: Record<string, string> = {
   trending: "Price is moving one way",
@@ -84,71 +85,92 @@ export function Nav({ base = "" }: { base?: string }) {
 
 /* ---------- hero ---------- */
 
-function heroFloats(d: DecisionDTO | null): ReactNode[] {
-  if (!d) {
-    return [
+function heroFloats(d: DecisionDTO | null, markets: MarketDTO[]): ReactNode[] {
+  const eth = markets.find((m) => m.market === "ETH") ?? markets[0];
+  const btc = markets.find((m) => m.market === "BTC");
+  const regimePill = (m: MarketDTO) => (m.regime === "stressed" ? "loss" : m.direction === "down" ? "loss" : m.direction === "up" ? "gain" : "plain");
+  const out: ReactNode[] = [];
+  if (eth) {
+    out.push(
       <>
-        <span className="pill plain">Sense</span> Gathers the evidence
+        <span className={`pill ${regimePill(eth)}`}>{eth.market}</span> {regimeText(eth)} · {pct(eth.change24Pct, 2)} 24h
       </>,
-      <>
-        <span className="pill plain">Weigh</span> Scores for and against
-      </>,
-      <>
-        <span className="pill plain">Explain</span> Writes down why
-      </>,
-      <>
-        <span className="pill plain">Regime</span> Reads the market first
-      </>,
-      <>
-        <span className="pill plain">Guard</span> Can veto any trade
-      </>,
-    ];
+    );
   }
-  const e0 = d.evidence[0];
-  const e1 = d.evidence[1];
-  const g = d.guard.find((x) => !x.pass) ?? d.guard[0];
-  return [
+  if (d) {
+    out.push(
+      <>
+        <b>{d.confidence}%</b> confident to {actionLabel(d.action).toLowerCase()}
+        <s style={cssVars({ "--p": `${d.confidence}%` })} />
+      </>,
+    );
+  } else if (btc) {
+    out.push(
+      <>
+        <span className={`pill ${regimePill(btc)}`}>{btc.market}</span> {regimeText(btc)} · {pct(btc.change24Pct, 2)} 24h
+      </>,
+    );
+  }
+  if (eth?.funding8hPct != null) {
+    out.push(
+      <>
+        <span className="pill plain">Funding</span> {fundingText(eth.funding8hPct)} / 8h
+      </>,
+    );
+  }
+  if (d) {
+    const vetoes = d.guard.filter((g) => !g.pass).length;
+    out.push(
+      <>
+        <span className={`pill ${vetoes ? "loss" : "gain"}`}>{vetoes ? "Veto" : "Guard"}</span>{" "}
+        {vetoes ? truncate(d.guard.find((g) => !g.pass)!.check, 28) : `${d.guard.length} of ${d.guard.length} checks pass`}
+      </>,
+    );
+  }
+  if (eth?.rsi != null) {
+    out.push(
+      <>
+        <span className="pill plain">RSI</span> {eth.rsi.toFixed(1)} on {eth.market}
+      </>,
+    );
+  }
+  const generic: ReactNode[] = [
     <>
-      <span className={`pill ${actionTag(d.action)}`}>{actionLabel(d.action)}</span>{" "}
-      {e0 ? truncate(`${e0.name}: ${e0.value}`, 34) : d.agentName}
+      <span className="pill plain">Sense</span> Gathers the evidence
     </>,
     <>
-      <b>{d.confidence}%</b> confident
-      <s style={cssVars({ "--p": `${d.confidence}%` })} />
+      <span className="pill plain">Weigh</span> Scores for and against
     </>,
-    e1 ? (
-      <>
-        <span className={`pill ${e1.score >= 0 ? "gain" : "loss"}`}>{e1.score >= 0 ? "For" : "Against"}</span>{" "}
-        {truncate(`${e1.name}: ${e1.value}`, 34)}
-      </>
-    ) : (
-      <>
-        <span className="pill plain">Market</span> {d.marketLabel}
-      </>
-    ),
     <>
-      <span className="pill plain">Regime</span> {regimeLabel(d.regime)}
+      <span className="pill plain">Explain</span> Writes down why
     </>,
-    g ? (
-      <>
-        <span className={`pill ${g.pass ? "gain" : "loss"}`}>{g.pass ? "Pass" : "Veto"}</span> {truncate(g.check, 30)}
-      </>
-    ) : (
-      <>
-        <span className="pill plain">Guard</span> No checks
-      </>
-    ),
+    <>
+      <span className="pill plain">Regime</span> Reads the market first
+    </>,
+    <>
+      <span className="pill plain">Guard</span> Can veto any trade
+    </>,
   ];
+  while (out.length < 5) out.push(generic[out.length]!);
+  return out.slice(0, 5);
 }
 
-export function Hero({ latest, decisions }: { latest: DecisionDTO | null; decisions: DecisionDTO[] }) {
+export function Hero({ latest, decisions, markets }: { latest: DecisionDTO | null; decisions: DecisionDTO[]; markets: MarketDTO[] }) {
   return (
     <section className="hero">
       <div className="wrap">
         <div className="hero-copy">
-          <a className="news" href="#plans">
-            <b>New</b>Paper trading is open
-          </a>
+          {markets.length ? (
+            <a className="news" href="#decision">
+              <b>Live</b>
+              <LiveDot />
+              Agents read {markets.map((m) => m.market).join(" and ")} hourly
+            </a>
+          ) : (
+            <a className="news" href="#plans">
+              <b>New</b>Paper trading is open
+            </a>
+          )}
           <h1>
             Agents that think.
             <br />
@@ -156,27 +178,45 @@ export function Hero({ latest, decisions }: { latest: DecisionDTO | null; decisi
           </h1>
           <p className="lede">
             Describe a strategy in a sentence. Your agent reads the market every hour, weighs the evidence for and
-            against, and writes down why it acted or waited. Practise with paper money now; vaults only you can
-            withdraw from come with live trading.
+            against, and writes down why it acted or waited.
           </p>
           <div className="cta">
             <Link className="btn blue xl" href="/app/studio">
               Build your agent
             </Link>
             <a className="btn ghost xl" href="#decision">
-              Read a decision
+              {latest ? "Read a live decision" : "Read a decision"}
             </a>
           </div>
         </div>
-        <Stage floats={heroFloats(latest)} />
+        <Stage floats={heroFloats(latest, markets)} />
       </div>
-      <Ticker decisions={decisions} />
+      <MarketBand markets={markets} />
+      <Ticker decisions={decisions} markets={markets} />
     </section>
   );
 }
 
-function Ticker({ decisions }: { decisions: DecisionDTO[] }) {
-  if (decisions.length === 0) {
+function Ticker({ decisions, markets }: { decisions: DecisionDTO[]; markets: MarketDTO[] }) {
+  type Item = { key: string; pill: ReactNode; who: string; text: string };
+  const items: Item[] = [];
+  for (const m of markets) {
+    items.push({
+      key: `m${m.market}`,
+      pill: <i className="pill plain">{m.market}</i>,
+      who: regimeText(m),
+      text: `${pct(m.change24Pct, 2)} in 24 hours${m.funding8hPct != null ? `, funding ${fundingText(m.funding8hPct)} per 8 hours` : ""}`,
+    });
+  }
+  for (const d of decisions.slice(0, 10)) {
+    items.push({
+      key: `d${d.id}`,
+      pill: <i className={`pill ${actionTag(d.action)}`}>{actionLabel(d.action)}</i>,
+      who: d.agentName,
+      text: leadSentence(d.explanation, 80),
+    });
+  }
+  if (items.length === 0) {
     return (
       <div className="ticker" aria-label="Latest decisions">
         <div className="track still">
@@ -185,21 +225,19 @@ function Ticker({ decisions }: { decisions: DecisionDTO[] }) {
       </div>
     );
   }
-  const items = decisions.slice(0, 12);
-  const item = (d: DecisionDTO, copy: boolean) => (
-    <span key={`${copy ? "c" : "o"}${d.id}`} aria-hidden={copy || undefined}>
-      <i className={`pill ${actionTag(d.action)}`} style={{ fontStyle: "normal" }}>
-        {actionLabel(d.action)}
-      </i>
-      <b>{d.agentName}</b>
-      {leadSentence(d.explanation, 80)}
-    </span>
-  );
+  const row = (copy: boolean) =>
+    items.map((it) => (
+      <span key={`${copy ? "c" : "o"}${it.key}`} aria-hidden={copy || undefined}>
+        {it.pill}
+        <b>{it.who}</b>
+        {it.text}
+      </span>
+    ));
   return (
-    <div className="ticker" aria-label="Latest decisions">
+    <div className="ticker" aria-label="Latest decisions and market readings">
       <div className="track">
-        {items.map((d) => item(d, false))}
-        {items.map((d) => item(d, true))}
+        {row(false)}
+        {row(true)}
       </div>
     </div>
   );
@@ -215,13 +253,14 @@ export function Product({ example }: { example: ExampleDTO | null }) {
     <section className="band" id="product">
       <div className="wrap">
         <div className="center">
+          <p className="eyebrow">The product</p>
           <h2>Type a sentence. Get an agent.</h2>
           <p className="sub">
             No templates and no sliders. Say what you want, check how it was understood, and test it on prices it has
             never seen.
           </p>
         </div>
-        <div className="browser">
+        <div className="browser" data-reveal>
           <div className="chrome">
             <i />
             <i />
@@ -255,22 +294,29 @@ export function Product({ example }: { example: ExampleDTO | null }) {
             </div>
             <div className="shot-r">
               <div className="shot-label">
-                {r ? `Backtest, ${r.tunedDays + r.unseenDays} days` : "Backtest"}
+                {r ? `Backtest, the last ${r.unseenDays} days it never saw` : "Backtest"}
               </div>
               {r && bt ? (
                 <>
+                  <div className={`edgebox${r.unseenReturnPct - r.holdingUnseenPct < 0 ? " behind" : ""}`}>
+                    <b className="num">{signed(Math.round((r.unseenReturnPct - r.holdingUnseenPct) * 10) / 10)} pts</b>
+                    <span>
+                      {r.unseenReturnPct - r.holdingUnseenPct >= 0 ? "ahead of" : "behind"} simply holding{" "}
+                      {bt.marketLabel.split(" / ")[0]} over the unseen days
+                    </span>
+                  </div>
                   <div className="shot-nums">
                     <div>
-                      <small>Unseen days</small>
-                      <b className={`num ${upDown(r.unseenReturnPct)}`}>{pct(r.unseenReturnPct)}</b>
+                      <small>Strategy</small>
+                      <b className="num">{pct(r.unseenReturnPct)}</b>
                     </div>
                     <div>
                       <small>Holding</small>
-                      <b className="num">{pct(r.holdingUnseenPct)}</b>
+                      <b className={`num ${upDown(r.holdingUnseenPct)}`}>{pct(r.holdingUnseenPct)}</b>
                     </div>
                     <div>
                       <small>Worst drop</small>
-                      <b className="down num">{pct(r.maxDrawdownPct)}</b>
+                      <b className="num">{pct(r.maxDrawdownPct)}</b>
                     </div>
                   </div>
                   <Chart
@@ -307,10 +353,11 @@ export function DecisionTape({ latest }: { latest: DecisionDTO | null }) {
       <div className="wrap">
         <div className="guard">
           <div>
-            <h2>Read one decision from start to finish.</h2>
+            <p className="eyebrow">{latest ? "Live decision" : "One decision"}</p>
+            <h2>{latest ? "Read a live decision from start to finish." : "Read one decision from start to finish."}</h2>
             <p className="sub">
-              This is what you see for every trade your agent makes or refuses. What it saw, how it weighed it, and
-              what stopped it.
+              This is what you see for every trade an agent makes or refuses. What it saw, how it weighed it, and what
+              stopped it.
             </p>
           </div>
           {latest ? <Tape d={latest} /> : <TapeEmpty />}
@@ -360,12 +407,14 @@ function Tape({ d }: { d: DecisionDTO }) {
     },
   ];
   return (
-    <div className="tape" aria-label="The latest agent decision">
+    <div className="tape" aria-label="The latest agent decision" data-reveal>
       <div className="tape-head">
         <b>{d.agentName}</b>
         <span className="pill">{d.marketLabel}</span>
-        <span className="pill plain">Paper</span>
-        <span className="when">{hourLabel(d.hour)}</span>
+        <span className="pill plain">{d.house ? "House · Paper" : "Paper"}</span>
+        <span className="when">
+          <LiveDot /> {hourLabel(d.hour)}
+        </span>
       </div>
       <TapeBody
         steps={steps}
@@ -384,7 +433,7 @@ function Tape({ d }: { d: DecisionDTO }) {
 
 function TapeEmpty() {
   return (
-    <div className="tape" aria-label="Agent decision">
+    <div className="tape" aria-label="Agent decision" data-reveal>
       <div className="tape-head">
         <b>No decisions yet</b>
         <span className="pill plain">Paper</span>
@@ -406,7 +455,8 @@ function TapeEmpty() {
 
 /* ---------- five steps ---------- */
 
-export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
+export function Thinks({ latest: d, markets }: { latest: DecisionDTO | null; markets: MarketDTO[] }) {
+  const m = markets.find((x) => x.market === "ETH") ?? markets[0] ?? null;
   const tabs = [
     { title: "Sense", text: "Gathers market evidence." },
     { title: "Read the regime", text: "Decides what kind of market this is." },
@@ -416,7 +466,9 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
   ];
   const views: ReactNode[] = [
     <>
-      <h3>{d ? `What ${d.agentName} looked at, ${hourLabel(d.hour)}` : "What the agent looks at"}</h3>
+      <h3>
+        {d ? `What ${d.agentName} looked at, ${hourLabel(d.hour)}` : m ? `What an agent sees on ${m.market} right now` : "What the agent looks at"}
+      </h3>
       <div className="src">
         {d ? (
           d.evidence.map((e) => (
@@ -425,14 +477,31 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
               <b>{e.value}</b>
             </div>
           ))
-        ) : (
+        ) : m ? (
           <>
             <div>
               <small>Price</small>
-              <b>Read every hour</b>
+              <b>
+                ${m.price.toLocaleString("en-US", { maximumFractionDigits: 2 })}, {pct(m.change24Pct, 2)} in 24 h
+              </b>
             </div>
             <div>
-              <small>Volume</small>
+              <small>RSI (14 h)</small>
+              <b>{m.rsi != null ? m.rsi.toFixed(1) : "—"}</b>
+            </div>
+            <div>
+              <small>Funding</small>
+              <b>{fundingText(m.funding8hPct)} per 8 h</b>
+            </div>
+            <div>
+              <small>Typical daily move</small>
+              <b>{m.dailyVolPct.toFixed(1)}%</b>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <small>Price and volume</small>
               <b>Read every hour</b>
             </div>
             <div>
@@ -441,19 +510,14 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
             </div>
           </>
         )}
-        {NOT_COLLECTED.map((n) => (
-          <div key={n} className="off">
-            <small>{n}</small>
-            <b>Not collected yet</b>
-          </div>
-        ))}
       </div>
+      <p className="note">{COMING_SOURCES}</p>
     </>,
     <>
       <h3>The same rule behaves differently in each market</h3>
       <div className="regime">
         {(["trending", "ranging", "stressed"] as const).map((r) => (
-          <div key={r} className={d?.regime === r ? "pick" : undefined}>
+          <div key={r} className={(d?.regime ?? m?.regime) === r ? "pick" : undefined}>
             <b>{regimeLabel(r)}</b>
             <span>{REGIME_TEXT[r]}</span>
           </div>
@@ -462,7 +526,9 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
       <p className="note">
         {d
           ? `At ${hourLabel(d.hour)} the agent classed ${d.marketLabel} as ${d.regime}, from its trend slope and volatility.`
-          : "Each hour the agent classes the market from its trend slope and volatility before it weighs anything."}
+          : m
+            ? `${m.marketLabel} right now: ${regimeText(m).toLowerCase()}. ${m.reason}`
+            : "Each hour the agent classes the market from its trend slope and volatility before it weighs anything."}
       </p>
     </>,
     <>
@@ -511,6 +577,7 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
   return (
     <section className="band" id="thinks">
       <div className="wrap">
+        <p className="eyebrow">How it decides</p>
         <h2>Five steps between a price tick and a trade.</h2>
         <p className="sub">
           A rule bot checks one indicator and fires. {BRAND_NAME} runs the same five steps every time, and writes down
@@ -522,112 +589,15 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
   );
 }
 
-/* ---------- bento ---------- */
-
-export function Bento({ board, example }: { board: LeaderboardRowDTO[]; example: ExampleDTO | null }) {
-  const r = example?.backtest?.status === "done" ? example.backtest.result : undefined;
-  return (
-    <section className="band paper" id="does">
-      <div className="wrap">
-        <h2>One wallet, the whole desk.</h2>
-        <div className="bento">
-          <article className="b-wide">
-            <div>
-              <h3>Copy a proven agent</h3>
-              <p>
-                The leaderboard ranks agents by how much they beat holding, after costs. Copying one into your own vault
-                with your own limits comes with live trading.
-              </p>
-            </div>
-            <div className="mini lbmini">
-              {board.length > 0 ? (
-                <>
-                  {board.slice(0, 3).map((row) => (
-                    <div key={row.agentId}>
-                      <span>{row.name}</span>
-                      <span>{row.market}</span>
-                      <b className="num">{pct(row.edgePct)}</b>
-                    </div>
-                  ))}
-                  <small>Edge over holding, paper agents</small>
-                </>
-              ) : (
-                <>
-                  <span className="lbempty">No ranked agents yet</span>
-                  <small>Paper agents are ranked after {LEADERBOARD.minDaysToRank} days live.</small>
-                </>
-              )}
-            </div>
-          </article>
-          <article>
-            <h3>Backtests you can trust</h3>
-            <p>Tuned on one stretch of history, scored on a later one it never saw.</p>
-            <div className="mini two">
-              <div>
-                <small>Tuned</small>
-                <b className="num">{r ? pct(r.tunedReturnPct) : "—"}</b>
-              </div>
-              <div className="hl">
-                <small>Unseen</small>
-                <b className="num">{r ? pct(r.unseenReturnPct) : "—"}</b>
-              </div>
-            </div>
-          </article>
-          <article>
-            <h3>
-              Portfolio agents<span className="tagsoon">Coming later</span>
-            </h3>
-            <p>Hold target weights across markets and rebalance on a schedule.</p>
-            <div className="mini bars">
-              <div style={cssVars({ "--w": "50%" })}>
-                <span>ETH</span>
-                <b>50%</b>
-              </div>
-              <div style={cssVars({ "--w": "30%" })}>
-                <span>BTC</span>
-                <b>30%</b>
-              </div>
-              <div style={cssVars({ "--w": "20%" })}>
-                <span>SPY</span>
-                <b>20%</b>
-              </div>
-              <small>Example split</small>
-            </div>
-          </article>
-          <article>
-            <h3>
-              Payroll from profits<span className="tagsoon">Coming later</span>
-            </h3>
-            <p>Pay your team in USDG or stock tokens, on schedule.</p>
-            <div className="mini run">
-              <b className="word">Later</b>
-              <span>Payroll arrives with live vaults</span>
-            </div>
-          </article>
-          <article>
-            <h3>
-              Telegram control<span className="tagsoon">Coming later</span>
-            </h3>
-            <p>Every decision as a message. Pause or ask why from your phone.</p>
-            <div className="mini chat">
-              <div className="me">Why did you sell?</div>
-              <div>Price closed back above the short average and reached your target.</div>
-            </div>
-          </article>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 /* ---------- comparison, safety, pricing, faq ---------- */
 
 export function Compare() {
   return (
     <section className="band">
       <div className="wrap">
+        <p className="eyebrow">Versus rule bots</p>
         <h2>What changes when the agent can reason.</h2>
-        <div className="cmp">
+        <div className="cmp" data-reveal>
           <table>
             <thead>
               <tr>
@@ -684,6 +654,7 @@ export function Safety() {
       <div className="wrap">
         <div className="guard">
           <div>
+            <p className="eyebrow">Safety</p>
             <h2>The agent trades. Only you withdraw.</h2>
             <p className="sub">
               Your funds sit in a vault contract that belongs to your wallet. The agent&apos;s key can swap inside it and
@@ -692,7 +663,7 @@ export function Safety() {
             </p>
             <p className="safenote">Live vaults are not open yet. Paper trading uses virtual money only.</p>
           </div>
-          <div className="rules">
+          <div className="rules" data-reveal>
             <div>
               <span>Withdraw</span>
               <b>You, any time, even when paused</b>
@@ -729,6 +700,7 @@ export function Pricing() {
     <section className="band" id="plans">
       <div className="wrap">
         <div className="center">
+          <p className="eyebrow">Pricing</p>
           <h2>Free while you learn.</h2>
           <p className="sub">Paper trading is free. Pricing for live trading will be announced before vaults open.</p>
         </div>
@@ -770,8 +742,11 @@ export function Faq() {
   return (
     <section className="band paper">
       <div className="wrap faqwrap">
-        <h2>Questions people ask first.</h2>
-        <div className="faq">
+        <div>
+          <p className="eyebrow">Questions</p>
+          <h2>Questions people ask first.</h2>
+        </div>
+        <div className="faq" data-reveal>
           <details open>
             <summary>Can the agent take my money?</summary>
             <p>
@@ -817,7 +792,7 @@ export function Closing() {
   return (
     <section className="closing">
       <div className="wrap">
-        <div className="closer">
+        <div className="closer" data-reveal>
           <h2>Give it a sentence. Read what it does with it.</h2>
           <p>Building and testing an agent takes about two minutes and no money.</p>
           <Link className="btn xl" href="/app/studio">

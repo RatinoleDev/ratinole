@@ -1,6 +1,7 @@
-import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO } from "@rationale/config";
+import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO, MarketDTO } from "@rationale/config";
+import { Features } from "../components/landing/Live";
+import { RevealInit } from "../components/landing/Reveal";
 import {
-  Bento,
   Closing,
   Compare,
   DecisionTape,
@@ -18,21 +19,24 @@ import { serverGet } from "../lib/server-api";
 export const revalidate = 30;
 
 export default async function Landing() {
-  const [decisions, example, board] = await Promise.all([
+  const [decisions, example, board, market] = await Promise.all([
     serverGet<DecisionDTO[]>("/public/decisions?limit=20"),
     serverGet<ExampleDTO>("/public/example"),
     serverGet<LeaderboardRowDTO[]>("/leaderboard"),
+    serverGet<MarketDTO[]>("/public/market"),
   ]);
   const list = Array.isArray(decisions) ? decisions : [];
+  const markets = Array.isArray(market) ? market : [];
   const latest = list[0] ?? null;
   return (
     <div id="landing">
+      <RevealInit />
       <Nav />
-      <Hero latest={latest} decisions={list} />
+      <Hero latest={latest} decisions={list} markets={markets} />
       <Product example={example} />
       <DecisionTape latest={latest} />
-      <Thinks latest={latest} />
-      <Bento board={Array.isArray(board) ? board.filter((r) => r.ranked) : []} example={example} />
+      <Thinks latest={latest} markets={markets} />
+      <Features board={Array.isArray(board) ? board : []} example={example} decisions={list} />
       <Compare />
       <Safety />
       <Pricing />

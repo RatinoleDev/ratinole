@@ -23,6 +23,7 @@ export const redis = new Redis(env.redisUrl);
 export async function wipe() {
   await redis.flushdb();
   await prisma.llmUsage.deleteMany();
+  await prisma.marketSnapshot.deleteMany();
   await prisma.decision.deleteMany();
   await prisma.agentState.deleteMany();
   await prisma.agent.deleteMany();

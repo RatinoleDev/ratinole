@@ -4,6 +4,7 @@
  */
 import type { Queue } from "bullmq";
 import { log } from "./log";
+import { snapshotMarkets } from "./market/snapshot";
 import { hourFloor, runAgentHours, type EngineDeps } from "./runAgent";
 
 export interface TickResult {
@@ -38,7 +39,8 @@ export async function tick(deps: EngineDeps & { queue?: Queue }): Promise<TickRe
       await runAgentAndRecord(a.id, hour, deps);
     }
   }
-  log("info", "tick", { hour: new Date(hour).toISOString(), agents: agents.length, queued: !!deps.queue });
+  const snapshots = await snapshotMarkets(deps);
+  log("info", "tick", { hour: new Date(hour).toISOString(), agents: agents.length, snapshots, queued: !!deps.queue });
   return { hour: new Date(hour).toISOString(), agents: agents.length };
 }
 

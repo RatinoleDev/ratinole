@@ -1,11 +1,11 @@
 /** Maps stored rows to the shapes in packages/config/src/api.ts. */
 import { backtestWarnings, describePlan, paramsText, type AgentParams, type EvidenceItem, type GuardCheck, type Plan } from "@rationale/brain";
-import { marketLabel, type AgentDTO, type BacktestDTO, type BacktestStatus, type CurvePointDTO, type DecisionDTO } from "@rationale/config";
-import type { Agent, AgentState, Backtest, Decision } from "@rationale/db";
+import { marketLabel, type AgentDTO, type BacktestDTO, type BacktestStatus, type CurvePointDTO, type DecisionDTO, type MarketDTO } from "@rationale/config";
+import type { Agent, AgentState, Backtest, Decision, MarketSnapshot } from "@rationale/db";
 
 const DAY_MS = 24 * 3_600_000;
 
-export function decisionDTO(d: Decision, agent: { name: string; market: string; sentence: string }): DecisionDTO {
+export function decisionDTO(d: Decision, agent: { name: string; market: string; sentence: string; house: boolean }): DecisionDTO {
   return {
     id: d.id,
     agentId: d.agentId,
@@ -28,6 +28,7 @@ export function decisionDTO(d: Decision, agent: { name: string; market: string; 
     markPrice: d.markPrice,
     candleSource: d.candleSource,
     agentName: agent.name,
+    house: agent.house,
     strategy: agent.sentence,
     market: agent.market,
     marketLabel: marketLabel(agent.market),
@@ -82,6 +83,7 @@ export function agentDTO(a: Agent & { state: AgentState | null }, latest: Decisi
     market: a.market,
     marketLabel: marketLabel(a.market),
     mode: "paper",
+    house: a.house,
     status: a.status as AgentDTO["status"],
     sentence: a.sentence,
     plan,
@@ -96,5 +98,24 @@ export function agentDTO(a: Agent & { state: AgentState | null }, latest: Decisi
     inPosition: (a.state?.qty ?? 0) > 0,
     decisions,
     lastDecisionAt: latest ? latest.hour.toISOString() : null,
+  };
+}
+
+export function marketDTO(m: MarketSnapshot): MarketDTO {
+  return {
+    market: m.market,
+    marketLabel: marketLabel(m.market),
+    price: m.price,
+    change24Pct: m.change24Pct,
+    regime: m.regime as MarketDTO["regime"],
+    direction: m.direction as MarketDTO["direction"],
+    reason: m.reason,
+    rsi: m.rsi,
+    funding8hPct: m.funding8hPct,
+    dailyVolPct: m.dailyVolPct,
+    closes7d: m.closes7d as unknown as number[],
+    asOf: m.hour.toISOString(),
+    candleSource: m.candleSource,
+    fundingSource: m.fundingSource,
   };
 }

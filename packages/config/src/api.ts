@@ -114,6 +114,8 @@ export interface DecisionDTO extends Decision {
   markPrice: number;
   candleSource: string;
   agentName: string;
+  /** Run by the Ratinole team (labelled "House"). */
+  house: boolean;
   /** The agent's strategy sentence. */
   strategy: string;
   market: string;
@@ -126,6 +128,7 @@ export interface AgentDTO {
   market: string;
   marketLabel: string;
   mode: "paper";
+  house: boolean;
   /** "archived" agents were deleted by their owner; their decisions are kept. */
   status: "active" | "paused" | "archived";
   sentence: string;
@@ -164,6 +167,7 @@ export interface LeaderboardRowDTO {
   market: string;
   marketLabel: string;
   mode: "paper";
+  house: boolean;
   returnPct: number;
   holdingPct: number;
   edgePct: number;
@@ -172,6 +176,27 @@ export interface LeaderboardRowDTO {
   decisions: number;
   /** False until the agent has been live long enough to be ranked. */
   ranked: boolean;
+}
+
+/** The engine's latest stored reading of a market. */
+export interface MarketDTO {
+  market: string;
+  marketLabel: string;
+  price: number;
+  change24Pct: number;
+  regime: "trending" | "ranging" | "stressed";
+  direction: "up" | "down" | "flat";
+  reason: string;
+  rsi: number | null;
+  /** Percent per 8 hours, 8-hour average. */
+  funding8hPct: number | null;
+  dailyVolPct: number;
+  /** Hourly closes for the last 7 days, oldest first. */
+  closes7d: number[];
+  /** The hour this reading belongs to. */
+  asOf: string;
+  candleSource: string;
+  fundingSource: string | null;
 }
 
 export interface ExampleDTO {

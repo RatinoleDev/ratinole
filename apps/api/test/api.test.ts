@@ -328,6 +328,25 @@ describe.skipIf(!hasDb)("api", () => {
       expect(h.engine.lastHeartbeat).not.toBeNull();
     });
 
+    it("serves the latest market reading per market, and flags house agents", async () => {
+      app = await makeApp().app;
+      const { a } = await seed(app);
+      const snap = (market: string, hour: number, price: number) =>
+        prisma.marketSnapshot.create({
+          data: { market, hour: new Date(hour), price, change24Pct: -0.2, regime: "trending", direction: "down", reason: "falling", rsi: 55.9, funding8hPct: 0.0082, dailyVolPct: 3, closes7d: [1, 2, 3], candleSource: "binance:ETHUSDT", fundingSource: "Hyperliquid" },
+        });
+      await snap("ETH", H, 1800);
+      await snap("ETH", H + HOUR_MS, 1803.46);
+      const m = (await app.inject({ method: "GET", url: "/api/public/market" })).json();
+      expect(m).toHaveLength(1);
+      expect(m[0]).toMatchObject({ market: "ETH", marketLabel: "ETH / USDG", price: 1803.46, regime: "trending", funding8hPct: 0.0082, closes7d: [1, 2, 3], asOf: new Date(H + HOUR_MS).toISOString(), fundingSource: "Hyperliquid" });
+      await prisma.agent.update({ where: { id: a.id }, data: { house: true } });
+      const feed = (await app.inject({ method: "GET", url: "/api/public/decisions?limit=5" })).json();
+      expect(feed.find((d: { agentName: string }) => d.agentName === "Alpha").house).toBe(true);
+      expect(feed.find((d: { agentName: string }) => d.agentName === "Beta").house).toBe(false);
+      expect((await app.inject({ method: "GET", url: `/api/agents/${a.id}` })).json().house).toBe(true);
+    });
+
     it("lists the latest public decisions and the landing example", async () => {
       app = await makeApp().app;
       await seed(app);

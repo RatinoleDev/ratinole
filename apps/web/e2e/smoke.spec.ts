@@ -75,7 +75,8 @@ test("landing shows honest empty states when there is no data", async ({ page })
   await page.goto("/");
   await expect(page.locator("h1")).toContainText("Agents that think.");
   await expect(page.getByText("No decisions yet").first()).toBeVisible();
-  await expect(page.getByText("No ranked agents yet")).toBeVisible();
+  await expect(page.getByText("No agents have reported yet")).toBeVisible();
+  await expect(page.locator(".mband")).toHaveCount(0); // no market reading, no market band
   await expect(page.getByText("Coming later").first()).toBeVisible();
   await expect(page.locator("p.legal")).toContainText("Paper trading uses virtual money");
   // No prototype sample numbers.

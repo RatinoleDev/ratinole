@@ -47,6 +47,8 @@ model Agent {
   mode         String      @default("paper")
   /// "active" | "paused" | "archived" (deleted by the owner; decisions are kept)
   status       String      @default("active")
+  /// Run by the Ratinole team to show live decisions; labelled "House" everywhere.
+  house        Boolean     @default(false)
   archivedAt   DateTime?
   startingCash Float
   /// Wallet limits copied at launch so later changes do not rewrite history.
@@ -221,4 +223,28 @@ model FundingRate {
   fetchedAt DateTime @default(now())
 
   @@id([market, source, hour])
+}
+
+/// The market as the engine read it at an hour: shown on the landing page.
+model MarketSnapshot {
+  market       String
+  /// Hour boundary the reading belongs to (close of the last candle used).
+  hour         DateTime
+  price        Float
+  change24Pct  Float
+  regime       String
+  direction    String
+  reason       String
+  rsi          Float?
+  /// Percent per 8 hours, 8-hour average; null when funding was unavailable.
+  funding8hPct Float?
+  dailyVolPct  Float
+  /// Hourly closes for the last 7 days, oldest first.
+  closes7d     Json
+  candleSource String
+  fundingSource String?
+  createdAt    DateTime @default(now())
+
+  @@id([market, hour])
+  @@index([hour])
 }

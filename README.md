@@ -83,6 +83,20 @@ example backtest daily. To run owed agents immediately without waiting:
 pnpm --filter @rationale/engine tick
 ```
 
+Each hourly run also stores a market reading for ETH and BTC (price, regime,
+RSI, funding) that the landing page shows. To store one right away:
+
+```bash
+pnpm --filter @rationale/engine tick market
+```
+
+To launch the house paper agents (run by the team, labelled "House" on the
+site) so visitors can read real decisions from the first hour:
+
+```bash
+pnpm --filter @rationale/engine tick house
+```
+
 In a sandbox where outbound traffic goes through an HTTPS proxy, start the
 engine with `NODE_USE_ENV_PROXY=1` so Node's fetch uses it.
 

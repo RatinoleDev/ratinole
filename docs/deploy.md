@@ -76,6 +76,13 @@ pm2 startup
 (`pm2 startup` prints one command to run with sudo so the processes come back
 after a reboot.) Run exactly one engine: it owns the hourly schedule.
 
+Fill the landing page straight away: store a market reading and launch the
+labelled house paper agents (their first decisions arrive on the next hour):
+
+```bash
+sudo -u ratinole -H bash -lc 'cd ~/app && pnpm --filter @rationale/engine tick market && pnpm --filter @rationale/engine tick house'
+```
+
 ## 5. Nginx and TLS
 
 Two stages, because the full config points at a certificate that does not exist

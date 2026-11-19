@@ -1,9 +1,9 @@
 /** Public data: leaderboard, latest decisions, the landing example, health. */
 import { HOUR_MS, describePlan, planChecks, type AgentParams } from "@rationale/brain";
-import { EXAMPLE_STRATEGY, LEADERBOARD, RISK_DEFAULTS, marketLabel, type ExampleDTO, type HealthDTO, type LeaderboardRowDTO } from "@rationale/config";
+import { EXAMPLE_STRATEGY, LEADERBOARD, MARKET_IDS, RISK_DEFAULTS, marketLabel, type ExampleDTO, type HealthDTO, type LeaderboardRowDTO, type MarketDTO } from "@rationale/config";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { backtestDTO, decisionDTO } from "../dto";
+import { backtestDTO, decisionDTO, marketDTO } from "../dto";
 import type { ApiDeps } from "../deps";
 
 const LimitQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) });
@@ -21,7 +21,7 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get("/leaderboard", async (): Promise<LeaderboardRowDTO[]> => {
     const agents = await deps.prisma.agent.findMany({
       where: { status: { not: "archived" }, state: { is: { decisions: { gt: 0 } } } },
-      select: { id: true, name: true, market: true, startingCash: true, launchedAt: true, state: true },
+      select: { id: true, name: true, market: true, house: true, startingCash: true, launchedAt: true, state: true },
     });
     const rows: LeaderboardRowDTO[] = agents.map((a) => {
       const s = a.state!;
@@ -34,6 +34,7 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
         market: a.market,
         marketLabel: marketLabel(a.market),
         mode: "paper",
+        house: a.house,
         returnPct,
         holdingPct,
         edgePct: returnPct - holdingPct,
@@ -52,9 +53,17 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
       where: { agent: { status: { not: "archived" } } },
       orderBy: [{ hour: "desc" }, { createdAt: "desc" }],
       take: q.limit,
-      include: { agent: { select: { name: true, market: true, sentence: true } } },
+      include: { agent: { select: { name: true, market: true, sentence: true, house: true } } },
     });
     return rows.map((d) => decisionDTO(d, d.agent));
+  });
+
+  /** The latest stored reading of each market (no reading = left out). */
+  app.get("/public/market", async (): Promise<MarketDTO[]> => {
+    const rows = await Promise.all(
+      MARKET_IDS.map((market) => deps.prisma.marketSnapshot.findFirst({ where: { market }, orderBy: { hour: "desc" } })),
+    );
+    return rows.filter((r) => r != null).map((r) => marketDTO(r!));
   });
 
   app.get("/public/example", async (): Promise<ExampleDTO> => {

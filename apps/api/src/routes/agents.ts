@@ -109,7 +109,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get<{ Params: { id: string }; Querystring: Record<string, string> }>("/agents/:id/decisions", async (req, reply) => {
     const q = DecisionsQuery.safeParse(req.query);
     if (!q.success) return sendError(reply, 400, "bad_request", "Bad query.");
-    const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, market: true, sentence: true } });
+    const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, market: true, sentence: true, house: true } });
     if (!a) return sendError(reply, 404, "not_found", "No such agent.");
     const rows = await deps.prisma.decision.findMany({
       where: { agentId: a.id, ...(q.data.before ? { hour: { lt: new Date(q.data.before) } } : {}) },
@@ -124,7 +124,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (!user) return reply;
     const agents = await deps.prisma.agent.findMany({
       where: { userId: user.id, status: { not: "archived" } },
-      select: { id: true, name: true, market: true, sentence: true, startingCash: true },
+      select: { id: true, name: true, market: true, sentence: true, house: true, startingCash: true },
     });
     const ids = agents.map((a) => a.id);
     const byId = new Map(agents.map((a) => [a.id, a]));

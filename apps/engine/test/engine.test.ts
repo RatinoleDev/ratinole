@@ -4,6 +4,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { FreshDataPendingError, recomputeStats, runAgentHours } from "../src/runAgent";
 import { ensureExample, runBacktest } from "../src/runBacktest";
 import type { FundingFeed } from "../src/market/funding";
+import { snapshotMarkets } from "../src/market/snapshot";
+import { HOUSE_AGENTS, seedHouseAgents } from "../src/house";
 import { tick } from "../src/tick";
 import { fakeFeed, synthCandles } from "./fakes";
 
@@ -29,6 +31,7 @@ async function wipe() {
   await prisma.engineRun.deleteMany();
   await prisma.candle.deleteMany();
   await prisma.fundingRate.deleteMany();
+  await prisma.marketSnapshot.deleteMany();
 }
 
 async function makeAgent(over: Partial<Prisma.AgentUncheckedCreateInput> = {}) {
@@ -255,5 +258,53 @@ describe.skipIf(!hasDb)("funding", () => {
     const r = await prisma.backtest.findUniqueOrThrow({ where: { id: bt.id } });
     expect(r.label).toBe("Price and funding signals");
     expect(r.source).toBe("Binance ETHUSDT hourly, Hyperliquid funding");
+  });
+});
+
+describe.skipIf(!hasDb)("market snapshots and house agents", () => {
+  beforeEach(wipe);
+  const now = Date.UTC(2026, 10, 18, 0, 30);
+  const long = synthCandles(Date.UTC(2026, 6, 1), Date.UTC(2026, 10, 18, 1), 9);
+  const funding: FundingFeed = {
+    name: "hyperliquid",
+    label: "Hyperliquid",
+    async fetch(_m, from, to) {
+      const out = new Map<number, number>();
+      for (let h = Math.ceil(from / HOUR_MS) * HOUR_MS; h < to; h += HOUR_MS) out.set(h, 0.0000125);
+      return out;
+    },
+  };
+
+  it("stores one reading per market per hour from closed candles", async () => {
+    const deps = { prisma, feeds: [fakeFeed("binance", long)], funding, now: () => now };
+    expect(await snapshotMarkets(deps)).toBe(2);
+    expect(await snapshotMarkets(deps)).toBe(2); // same hour: updated, not duplicated
+    const rows = await prisma.marketSnapshot.findMany({ orderBy: { market: "asc" } });
+    expect(rows.map((r) => r.market)).toEqual(["BTC", "ETH"]);
+    const eth = rows[1]!;
+    expect(eth.hour.getTime()).toBe(Date.UTC(2026, 10, 18, 0));
+    expect(eth.price).toBeCloseTo(long.find((c) => c.t === Date.UTC(2026, 10, 17, 23))!.c, 9);
+    expect(["trending", "ranging", "stressed"]).toContain(eth.regime);
+    expect(eth.funding8hPct).toBeCloseTo(0.01, 9);
+    expect(eth.fundingSource).toBe("Hyperliquid");
+    expect((eth.closes7d as number[]).length).toBe(168);
+    expect(eth.candleSource).toBe("binance:ETHUSDT");
+  });
+
+  it("launches labelled house agents once, from backtested plans", async () => {
+    const deps = { prisma, feeds: [fakeFeed("binance", long)], funding, now: () => now };
+    const first = await seedHouseAgents(deps);
+    expect(first.map((r) => r.result)).toEqual(HOUSE_AGENTS.map(() => "launched"));
+    const agents = await prisma.agent.findMany({ include: { user: true } });
+    expect(agents).toHaveLength(HOUSE_AGENTS.length);
+    for (const a of agents) {
+      expect(a.house).toBe(true);
+      expect(a.user.address).toBe("house");
+      expect(a.backtestId).toBeTruthy();
+      expect(a.owedFrom.getTime()).toBe(Date.UTC(2026, 10, 18, 1));
+    }
+    const again = await seedHouseAgents(deps);
+    expect(again.every((r) => r.result === "already running")).toBe(true);
+    expect(await prisma.agent.count()).toBe(HOUSE_AGENTS.length);
   });
 });
