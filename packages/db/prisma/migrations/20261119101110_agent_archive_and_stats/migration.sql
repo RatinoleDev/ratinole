@@ -1,0 +1,10 @@
+-- AlterTable
+ALTER TABLE "Agent" ADD COLUMN     "archivedAt" TIMESTAMP(3);
+
+-- AlterTable
+ALTER TABLE "AgentState" ADD COLUMN     "decisions" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "lastEquity" DOUBLE PRECISION,
+ADD COLUMN     "lastHoldingEquity" DOUBLE PRECISION,
+ADD COLUMN     "lastHour" TIMESTAMP(3),
+ADD COLUMN     "maxDrawdownPct" DOUBLE PRECISION NOT NULL DEFAULT 0,
+ADD COLUMN     "peakEquity" DOUBLE PRECISION;

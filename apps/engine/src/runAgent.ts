@@ -110,6 +110,14 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
   };
   let state: PositionState = agent.state ? toState(agent.state) : initialState(agent.startingCash, start);
   let holdEntry = agent.holdEntryPrice;
+  // Running stats, written with each decision. `lastHour` doubles as a check
+  // that no other worker moved this agent on since we read its state.
+  let stats = {
+    decisions: agent.state?.decisions ?? 0,
+    peak: agent.state?.peakEquity ?? agent.startingCash,
+    maxDd: agent.state?.maxDrawdownPct ?? 0,
+    lastHour: agent.state?.lastHour?.getTime() ?? null,
+  };
   let decided = 0;
   let late = 0;
 
@@ -130,10 +138,21 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
     const isLate = now - h > LATE_AFTER_MS;
     const d = out.decision;
 
+    const peak = Math.max(stats.peak, out.equity);
+    const next = {
+      decisions: stats.decisions + 1,
+      peak,
+      maxDd: Math.min(stats.maxDd, (out.equity / peak - 1) * 100),
+      lastHour: h,
+    };
+
     const stored = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${agentId}))`;
       const exists = await tx.decision.findUnique({ where: { agentId_hour: { agentId, hour: new Date(h) } }, select: { id: true } });
       if (exists) return false;
+      // Our in-memory state must still be the stored one; otherwise another worker moved on.
+      const current = await tx.agentState.findUnique({ where: { agentId }, select: { lastHour: true } });
+      if ((current?.lastHour?.getTime() ?? null) !== stats.lastHour) return false;
       await tx.decision.create({
         data: {
           agentId,
@@ -159,10 +178,18 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
           candleTime: new Date(candleTime),
         },
       });
+      const statRow = {
+        decisions: next.decisions,
+        lastHour: new Date(h),
+        lastEquity: out.equity,
+        lastHoldingEquity: holdingEquity,
+        peakEquity: next.peak,
+        maxDrawdownPct: next.maxDd,
+      };
       await tx.agentState.upsert({
         where: { agentId },
-        create: { agentId, ...stateRow(out.state) },
-        update: stateRow(out.state),
+        create: { agentId, ...stateRow(out.state), ...statRow },
+        update: { ...stateRow(out.state), ...statRow },
       });
       if (agent.holdEntryPrice == null) await tx.agent.update({ where: { id: agentId }, data: { holdEntryPrice: holdEntry } });
       return true;
@@ -170,15 +197,50 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
 
     if (!stored) {
       // Another worker got here first; it owns the rest of this run.
-      log("info", "decision already stored; stopping", { agentId, hour: new Date(h).toISOString() });
+      log("info", "agent moved on by another worker; stopping", { agentId, hour: new Date(h).toISOString() });
       break;
     }
     agent.holdEntryPrice = holdEntry;
     state = out.state;
+    stats = next;
     decided++;
     if (isLate) late++;
   }
 
   log("info", "agent run", { agentId, decided, late, source: set.sourceLabel, upTo: new Date(upToHour).toISOString() });
   return { agentId, decided, late, skipped: false };
+}
+
+/**
+ * Recompute every agent's running stats from its stored decisions. Use after
+ * upgrading or to repair; the hourly run keeps them current otherwise.
+ */
+export async function recomputeStats(prisma: PrismaClient): Promise<number> {
+  const agents = await prisma.agent.findMany({ where: { state: { isNot: null } }, select: { id: true, startingCash: true } });
+  for (const a of agents) {
+    const rows = await prisma.decision.findMany({
+      where: { agentId: a.id },
+      orderBy: { hour: "asc" },
+      select: { hour: true, equityAfter: true, holdingEquityAfter: true },
+    });
+    let peak = a.startingCash;
+    let maxDd = 0;
+    for (const r of rows) {
+      peak = Math.max(peak, r.equityAfter);
+      maxDd = Math.min(maxDd, (r.equityAfter / peak - 1) * 100);
+    }
+    const last = rows[rows.length - 1];
+    await prisma.agentState.update({
+      where: { agentId: a.id },
+      data: {
+        decisions: rows.length,
+        lastHour: last?.hour ?? null,
+        lastEquity: last?.equityAfter ?? null,
+        lastHoldingEquity: last?.holdingEquityAfter ?? null,
+        peakEquity: peak,
+        maxDrawdownPct: maxDd,
+      },
+    });
+  }
+  return agents.length;
 }

@@ -88,6 +88,8 @@ export interface BacktestDTO {
     unseenTrades: number;
     /** Plain-language lines describing what the tuner chose. */
     paramsText: string[];
+    /** Reasons to be careful with these numbers, e.g. too few trades. */
+    warnings: string[];
     curve: CurvePointDTO[];
   };
 }
@@ -124,7 +126,8 @@ export interface AgentDTO {
   market: string;
   marketLabel: string;
   mode: "paper";
-  status: "active" | "paused";
+  /** "archived" agents were deleted by their owner; their decisions are kept. */
+  status: "active" | "paused" | "archived";
   sentence: string;
   plan: Plan;
   rows: PlanRowDTO[];
@@ -167,6 +170,8 @@ export interface LeaderboardRowDTO {
   maxDrawdownPct: number;
   daysLive: number;
   decisions: number;
+  /** False until the agent has been live long enough to be ranked. */
+  ranked: boolean;
 }
 
 export interface ExampleDTO {

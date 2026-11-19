@@ -35,9 +35,9 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     const bt = await deps.prisma.backtest.findUnique({ where: { id: body.data.backtestId } });
     if (!bt || bt.userId !== user.id) return sendError(reply, 404, "not_found", "No such backtest.");
     if (bt.status !== "done" || !bt.params) return sendError(reply, 409, "backtest_not_done", "Wait for the backtest to finish before launching.");
-    const existing = await deps.prisma.agent.findMany({ where: { userId: user.id }, select: { name: true } });
+    const existing = await deps.prisma.agent.findMany({ where: { userId: user.id, status: { not: "archived" } }, select: { name: true } });
     if (existing.length >= PAPER.maxAgentsPerUser) {
-      return sendError(reply, 409, "agent_limit", `Paper trading allows ${PAPER.maxAgentsPerUser} agents per wallet.`);
+      return sendError(reply, 409, "agent_limit", `Paper trading allows ${PAPER.maxAgentsPerUser} agents per wallet. Delete one in My agents to launch another.`);
     }
     let name = pickName(existing.map((e) => e.name));
     if (body.data.name != null && body.data.name.trim() !== "") {
@@ -68,7 +68,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get("/agents", async (req, reply) => {
     const user = await requireUser(deps, req, reply);
     if (!user) return reply;
-    const agents = await deps.prisma.agent.findMany({ where: { userId: user.id }, orderBy: { launchedAt: "desc" }, select: { id: true } });
+    const agents = await deps.prisma.agent.findMany({ where: { userId: user.id, status: { not: "archived" } }, orderBy: { launchedAt: "desc" }, select: { id: true } });
     const out = await Promise.all(agents.map((a) => loadAgentDTO(a.id)));
     return out.filter((x) => x).map((x) => x!.dto);
   });
@@ -85,7 +85,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     const body = PatchBody.safeParse(req.body);
     if (!body.success) return sendError(reply, 400, "bad_request", "Status must be active or paused.");
     const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id } });
-    if (!a || a.userId !== user.id) return sendError(reply, 404, "not_found", "No such agent.");
+    if (!a || a.userId !== user.id || a.status === "archived") return sendError(reply, 404, "not_found", "No such agent.");
     if (a.status !== body.data.status) {
       await deps.prisma.agent.update({
         where: { id: a.id },
@@ -94,6 +94,16 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
       });
     }
     return (await loadAgentDTO(a.id))!.dto;
+  });
+
+  /** Delete = archive: the agent stops, leaves your list and the rankings, and frees a slot. Its decisions stay on record. */
+  app.delete<{ Params: { id: string } }>("/agents/:id", async (req, reply) => {
+    const user = await requireUser(deps, req, reply);
+    if (!user) return reply;
+    const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id } });
+    if (!a || a.userId !== user.id || a.status === "archived") return sendError(reply, 404, "not_found", "No such agent.");
+    await deps.prisma.agent.update({ where: { id: a.id }, data: { status: "archived", archivedAt: new Date(now()) } });
+    return { ok: true };
   });
 
   app.get<{ Params: { id: string }; Querystring: Record<string, string> }>("/agents/:id/decisions", async (req, reply) => {
@@ -112,7 +122,10 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get("/overview", async (req, reply): Promise<OverviewDTO | typeof reply> => {
     const user = await requireUser(deps, req, reply);
     if (!user) return reply;
-    const agents = await deps.prisma.agent.findMany({ where: { userId: user.id }, select: { id: true, name: true, market: true, sentence: true, startingCash: true } });
+    const agents = await deps.prisma.agent.findMany({
+      where: { userId: user.id, status: { not: "archived" } },
+      select: { id: true, name: true, market: true, sentence: true, startingCash: true },
+    });
     const ids = agents.map((a) => a.id);
     const byId = new Map(agents.map((a) => [a.id, a]));
     const rows = ids.length

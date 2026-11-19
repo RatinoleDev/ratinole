@@ -45,8 +45,9 @@ model Agent {
   params       Json
   market       String
   mode         String      @default("paper")
-  /// "active" | "paused"
+  /// "active" | "paused" | "archived" (deleted by the owner; decisions are kept)
   status       String      @default("active")
+  archivedAt   DateTime?
   startingCash Float
   /// Wallet limits copied at launch so later changes do not rewrite history.
   maxSizePct      Float
@@ -78,6 +79,13 @@ model AgentState {
   lastBuyAt      DateTime?
   dayStart       DateTime
   dayStartEquity Float
+  /// Running stats over all stored decisions, so rankings need not scan them.
+  decisions         Int       @default(0)
+  lastHour          DateTime?
+  lastEquity        Float?
+  lastHoldingEquity Float?
+  peakEquity        Float?
+  maxDrawdownPct    Float     @default(0)
   updatedAt      DateTime  @updatedAt
 }
 

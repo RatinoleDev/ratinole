@@ -125,3 +125,16 @@ describe("walkForward", () => {
     ]);
   });
 });
+
+describe("backtestWarnings", () => {
+  it("warns about tiny samples and a tuner that chose not to trade", async () => {
+    const { backtestWarnings } = await import("../src/backtest/warnings");
+    expect(backtestWarnings({ tunedTrades: 12, unseenTrades: 14 })).toEqual([]);
+    const few = backtestWarnings({ tunedTrades: 6, unseenTrades: 4 });
+    expect(few).toHaveLength(1);
+    expect(few[0]).toMatch(/^Only 4 buys and sells on the unseen days: too few to tell skill from luck/);
+    const none = backtestWarnings({ tunedTrades: 0, unseenTrades: 0 });
+    expect(none[0]).toMatch(/tuner chose the strictest one/);
+    expect(none[1]).toMatch(/nothing to judge yet/);
+  });
+});

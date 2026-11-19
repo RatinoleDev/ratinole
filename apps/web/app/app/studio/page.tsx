@@ -268,6 +268,16 @@ export default function StudioPage() {
                   Unseen days
                 </span>
               </div>
+              {r.warnings.length > 0 && (
+                <div className="warnbox" role="note">
+                  <b>Read these numbers with care</b>
+                  <ul>
+                    {r.warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {r.paramsText.length > 0 && (
                 <ul className="paramlist">
                   {r.paramsText.map((t) => (

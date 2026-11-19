@@ -8,7 +8,7 @@ import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
 import { DecisionRow } from "../../../components/app/DecisionFeed";
 import { ConnectPanel, useSession } from "../../../components/app/Session";
-import { api, patch } from "../../../lib/api";
+import { api, del, patch } from "../../../lib/api";
 import { dateLabel, pct, upDown } from "../../../lib/format";
 
 function AgentLog({ agent }: { agent: AgentDTO }) {
@@ -57,6 +57,23 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
     }
   }
 
+  async function remove() {
+    const ok = window.confirm(
+      `Delete ${agent.name}? It stops running and leaves your list and the leaderboard. Its past decisions stay on record. This cannot be undone.`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await del(`/agents/${agent.id}`);
+      await qc.invalidateQueries({ queryKey: ["agents"] });
+      await qc.invalidateQueries({ queryKey: ["me"] });
+      toast(`${agent.name} deleted`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not delete the agent.");
+      setBusy(false);
+    }
+  }
+
   return (
     <details className="agent" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
       <summary>
@@ -92,6 +109,9 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
             </button>
             <button className="btn sm" onClick={() => void toggle()} disabled={busy}>
               {agent.status === "active" ? "Pause" : "Resume"}
+            </button>
+            <button className="btn sm ghost" onClick={() => void remove()} disabled={busy}>
+              Delete
             </button>
           </div>
         </div>

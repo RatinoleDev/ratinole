@@ -16,6 +16,8 @@ const NAV = [
   { href: "/app/vault", label: "Vault" },
   { href: "/app/payroll", label: "Payroll" },
 ];
+/** Pages reached from the wallet menu rather than the rail. */
+const HIDDEN = [{ href: "/app/settings", label: "Settings" }];
 
 function WalletButton() {
   const { me, signIn, signOut, signingIn } = useSession();
@@ -44,6 +46,9 @@ function WalletButton() {
       {open && (
         <div className="wallet-menu" role="menu">
           <small>Signed in as {shortAddress(me.address)}</small>
+          <Link role="menuitem" href="/app/settings" onClick={() => setOpen(false)}>
+            Settings
+          </Link>
           <button
             role="menuitem"
             onClick={() => {
@@ -63,7 +68,10 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const toast = useToast();
   const { me } = useSession();
-  const active = NAV.find((n) => n.href === pathname) ?? NAV.find((n) => n.href !== "/app" && pathname.startsWith(n.href)) ?? NAV[0]!;
+  const active =
+    [...NAV, ...HIDDEN].find((n) => n.href === pathname) ??
+    NAV.find((n) => n.href !== "/app" && pathname.startsWith(n.href)) ??
+    NAV[0]!;
   return (
     <div id="app">
       <aside className="rail">

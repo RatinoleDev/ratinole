@@ -96,6 +96,28 @@ describe.skipIf(!hasDb)("api", () => {
     });
   });
 
+  describe("settings", () => {
+    it("lets a wallet change its own limits within bounds", async () => {
+      app = await makeApp().app;
+      const { cookie } = await signIn(app);
+      const ok = await app.inject({ method: "PATCH", url: "/api/me", headers: { cookie }, payload: { maxSizePct: 20, dailyLossCapPct: 2 } });
+      expect(ok.json()).toMatchObject({ maxSizePct: 20, dailyLossCapPct: 2 });
+      expect((await app.inject({ method: "PATCH", url: "/api/me", headers: { cookie }, payload: { maxSizePct: 150 } })).statusCode).toBe(400);
+      expect((await app.inject({ method: "PATCH", url: "/api/me", headers: { cookie }, payload: { dailyLossCapPct: 0 } })).statusCode).toBe(400);
+      expect((await app.inject({ method: "PATCH", url: "/api/me", headers: { cookie }, payload: { address: "0x0" } })).statusCode).toBe(400);
+      expect((await app.inject({ method: "PATCH", url: "/api/me", payload: { maxSizePct: 20 } })).statusCode).toBe(401);
+    });
+
+    it("applies the new cap to the next intake", async () => {
+      app = await makeApp({ drafterFor: () => async () => validDraft({ sizePctOfCash: 25 }) }).app;
+      const { cookie } = await signIn(app);
+      await app.inject({ method: "PATCH", url: "/api/me", headers: { cookie }, payload: { maxSizePct: 20 } });
+      const res = (await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30, 25% per trade" } })).json();
+      expect(res).toMatchObject({ ok: false, code: "size_over_cap" });
+      expect(res.message).toMatch(/over your 20% cap/);
+    });
+  });
+
   describe("intake", () => {
     it("needs a signed-in wallet", async () => {
       app = await makeApp().app;
@@ -179,6 +201,8 @@ describe.skipIf(!hasDb)("api", () => {
       expect(res.statusCode).toBe(201);
       const agent = res.json();
       expect(agent).toMatchObject({ name: "Meridian", mode: "paper", status: "active", equity: null, decisions: 0, startingCash: 10_000 });
+      const shown = (await app.inject({ method: "GET", url: `/api/backtests/${bt.id}`, headers: { cookie } })).json();
+      expect(shown.result.warnings[0]).toMatch(/^Only 2 buys and sells on the unseen days/);
       expect(agent.paramsText[0]).toMatch(/confidence is at least 50%/);
       const row = await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } });
       expect(row.owedFrom.getTime()).toBe(Date.UTC(2026, 10, 19, 11));
@@ -229,7 +253,14 @@ describe.skipIf(!hasDb)("api", () => {
       await dec(a.id, 2, 10_400, 10_100);
       await dec(b.id, 0, 10_000, 9_990);
       await dec(b.id, 1, 10_050, 10_200);
-      return { cookie, a, b };
+      // Running stats as the engine keeps them.
+      const st = (agentId: string, decisions: number, lastEquity: number, lastHoldingEquity: number, peakEquity: number, maxDrawdownPct: number) =>
+        prisma.agentState.create({
+          data: { agentId, cash: lastEquity, qty: 0, dayStart: new Date(H), dayStartEquity: 10_000, decisions, lastHour: new Date(H + (decisions - 1) * HOUR_MS), lastEquity, lastHoldingEquity, peakEquity, maxDrawdownPct },
+        });
+      await st(a.id, 3, 10_400, 10_100, 10_400, -5);
+      await st(b.id, 2, 10_050, 10_200, 10_050, 0);
+      return { cookie, a, b, user };
     }
 
     it("serves the decision log newest first, publicly", async () => {
@@ -256,13 +287,34 @@ describe.skipIf(!hasDb)("api", () => {
       expect(o.latest[0].explanation).toBe("Hold 2");
     });
 
-    it("ranks the leaderboard by edge over holding", async () => {
+    it("ranks agents live 7+ days by edge over holding, from stored stats, and lists newer ones after", async () => {
       app = await makeApp({ now: () => H + 3 * HOUR_MS }).app;
-      await seed(app);
-      const lb = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json();
+      const { b } = await seed(app);
+      let lb = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json();
       expect(lb.map((r: { name: string }) => r.name)).toEqual(["Alpha", "Beta"]);
-      expect(lb[0]).toMatchObject({ returnPct: expect.closeTo(4, 6), holdingPct: expect.closeTo(1, 6), edgePct: expect.closeTo(3, 6), daysLive: 3, decisions: 3, mode: "paper" });
+      expect(lb[0]).toMatchObject({ returnPct: expect.closeTo(4, 6), holdingPct: expect.closeTo(1, 6), edgePct: expect.closeTo(3, 6), maxDrawdownPct: -5, daysLive: 3, decisions: 3, mode: "paper", ranked: false });
       expect(lb[1].edgePct).toBeCloseTo(0.5 - 2, 6);
+      // Beta has been live long enough; it is ranked and so comes first despite a lower edge.
+      await prisma.agent.update({ where: { id: b.id }, data: { launchedAt: new Date(H - 10 * 24 * HOUR_MS) } });
+      lb = (await app.inject({ method: "GET", url: "/api/leaderboard" })).json();
+      expect(lb.map((r: { name: string; ranked: boolean }) => [r.name, r.ranked])).toEqual([["Beta", true], ["Alpha", false]]);
+    });
+
+    it("deleting an agent archives it: off lists and rankings, slot freed, decisions kept", async () => {
+      app = await makeApp({ now: () => H + 3 * HOUR_MS }).app;
+      const { cookie, a } = await seed(app);
+      const other = await signIn(app);
+      expect((await app.inject({ method: "DELETE", url: `/api/agents/${a.id}`, headers: { cookie: other.cookie } })).statusCode).toBe(404);
+      expect((await app.inject({ method: "DELETE", url: `/api/agents/${a.id}`, headers: { cookie } })).json()).toEqual({ ok: true });
+      expect((await app.inject({ method: "GET", url: "/api/agents", headers: { cookie } })).json().map((x: { name: string }) => x.name)).toEqual(["Beta"]);
+      expect((await app.inject({ method: "GET", url: "/api/me", headers: { cookie } })).json().agentCount).toBe(1);
+      expect((await app.inject({ method: "GET", url: "/api/leaderboard" })).json().map((r: { name: string }) => r.name)).toEqual(["Beta"]);
+      const feed = (await app.inject({ method: "GET", url: "/api/public/decisions" })).json();
+      expect(feed.every((d: { agentName: string }) => d.agentName === "Beta")).toBe(true);
+      expect(await prisma.decision.count({ where: { agentId: a.id } })).toBe(3);
+      expect((await app.inject({ method: "GET", url: `/api/agents/${a.id}` })).json().status).toBe("archived");
+      expect((await app.inject({ method: "PATCH", url: `/api/agents/${a.id}`, headers: { cookie }, payload: { status: "active" } })).statusCode).toBe(404);
+      expect((await app.inject({ method: "DELETE", url: `/api/agents/${a.id}`, headers: { cookie } })).statusCode).toBe(404);
     });
 
     it("reports missed hours and engine health", async () => {

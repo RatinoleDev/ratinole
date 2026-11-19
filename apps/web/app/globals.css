@@ -514,8 +514,8 @@ a.btn{text-decoration:none;display:inline-block;text-align:center}
 .btsrc{margin-top:10px;font-size:13px;color:var(--ink3)}
 .wallet-wrap{position:relative}
 .wallet-menu{position:absolute;right:0;top:calc(100% + 8px);background:#fff;border:1px solid var(--line);border-radius:14px;padding:6px;box-shadow:0 20px 40px -24px rgba(11,11,12,.45);z-index:30;min-width:180px}
-.wallet-menu button{all:unset;box-sizing:border-box;display:block;width:100%;padding:10px 12px;border-radius:10px;font-size:14.5px;cursor:pointer}
-.wallet-menu button:hover{background:var(--fog)}
+.wallet-menu button,.wallet-menu a{all:unset;box-sizing:border-box;display:block;width:100%;padding:10px 12px;border-radius:10px;font-size:14.5px;cursor:pointer}
+.wallet-menu button:hover,.wallet-menu a:hover{background:var(--fog)}
 .wallet-menu small{display:block;padding:8px 12px 4px;font-size:12.5px;color:var(--ink3)}
 .agent .log .ctl{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:12px 0 6px;border-bottom:1px solid var(--line)}
 .agent .log .ctl p{font-size:14px;color:var(--ink3);margin:0}
@@ -546,3 +546,14 @@ a.btn{text-decoration:none;display:inline-block;text-align:center}
 .lbempty-p{padding:22px 0 6px;text-align:center}
 .track.still{animation:none;width:auto;justify-content:center;padding:16px 20px}
 .track.still span{white-space:normal;text-align:center;justify-content:center}
+
+/* settings */
+.settings{display:grid;gap:18px;max-width:560px}
+.settings label{display:grid;gap:8px;font-weight:600;font-size:15px}
+.settings label small{font-weight:400;color:var(--ink3);font-size:13.5px}
+.settings .row2{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.settings input[type=number]{max-width:160px}
+/* leaderboard: agents not ranked yet */
+.lb tr.unranked td{color:var(--ink3)}
+.lb tr.unranked td b{color:var(--ink2)}
+.lb .sep td{font-size:13px;color:var(--ink3);background:var(--fog);font-weight:600}

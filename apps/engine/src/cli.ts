@@ -3,9 +3,11 @@
  *   pnpm --filter @rationale/engine tick              run every owed agent now
  *   pnpm --filter @rationale/engine tick example      refresh the example backtest
  *   pnpm --filter @rationale/engine tick backtest ID  run one backtest
+ *   pnpm --filter @rationale/engine tick stats        recompute every agent's running stats
  */
 import { prisma } from "@rationale/db";
 import { redisConnection } from "./redis";
+import { recomputeStats } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
 import { tick } from "./tick";
 
@@ -17,6 +19,7 @@ async function main() {
   if (!cmd) console.log(await tick(deps));
   else if (cmd === "example") console.log(await ensureExample(deps));
   else if (cmd === "backtest" && arg) console.log(await runBacktest(arg, deps));
+  else if (cmd === "stats") console.log({ agents: await recomputeStats(prisma) });
   else throw new Error(`Unknown command ${cmd}`);
 }
 

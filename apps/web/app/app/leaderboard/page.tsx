@@ -1,6 +1,6 @@
 "use client";
 
-import type { LeaderboardRowDTO } from "@rationale/config";
+import { LEADERBOARD, type LeaderboardRowDTO } from "@rationale/config";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "../../../lib/api";
@@ -13,12 +13,33 @@ export default function LeaderboardPage() {
     refetchInterval: 60_000,
   });
   const rows = q.data ?? [];
+  const ranked = rows.filter((r) => r.ranked);
+  const pending = rows.filter((r) => !r.ranked);
+  const row = (r: LeaderboardRowDTO, rank: number | null) => (
+    <tr key={r.agentId} className={rank == null ? "unranked" : undefined}>
+      <td>
+        <b>{rank != null ? `${rank}. ` : ""}{r.name}</b>
+      </td>
+      <td>{r.marketLabel}</td>
+      <td className={`r num ${upDown(r.returnPct)}`}>{pct(r.returnPct)}</td>
+      <td className="r num">{pct(r.holdingPct)}</td>
+      <td className={`r num ${rank != null ? upDown(r.edgePct) : ""}`}>{pct(r.edgePct)}</td>
+      <td className="r num down">{pct(r.maxDrawdownPct)}</td>
+      <td className="r num">{r.daysLive}</td>
+      <td className="r">
+        <button className="btn sm ghost" disabled title="Copy trading arrives with live vaults">
+          Copy
+        </button>
+      </td>
+    </tr>
+  );
   return (
     <section>
       <div className="panel">
         <h2>Agents ranked against holding</h2>
         <p className="hint">
-          Paper agents. Ranked by how much they beat holding the same market since launch, after simulated costs.
+          Paper agents. Ranked by how much they beat holding the same market since launch, after simulated costs. An agent is
+          ranked once it has been live for {LEADERBOARD.minDaysToRank} days.
         </p>
         <div className="lbwrap">
           <table className="lb">
@@ -35,24 +56,13 @@ export default function LeaderboardPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.agentId}>
-                  <td>
-                    <b>{r.name}</b>
-                  </td>
-                  <td>{r.marketLabel}</td>
-                  <td className={`r num ${upDown(r.returnPct)}`}>{pct(r.returnPct)}</td>
-                  <td className="r num">{pct(r.holdingPct)}</td>
-                  <td className={`r num ${upDown(r.edgePct)}`}>{pct(r.edgePct)}</td>
-                  <td className="r num down">{pct(r.maxDrawdownPct)}</td>
-                  <td className="r num">{r.daysLive}</td>
-                  <td className="r">
-                    <button className="btn sm ghost" disabled title="Copy trading arrives with live vaults">
-                      Copy
-                    </button>
-                  </td>
+              {ranked.map((r, i) => row(r, i + 1))}
+              {pending.length > 0 && (
+                <tr className="sep">
+                  <td colSpan={8}>Not ranked yet: live for under {LEADERBOARD.minDaysToRank} days</td>
                 </tr>
-              ))}
+              )}
+              {pending.map((r) => row(r, null))}
             </tbody>
           </table>
         </div>

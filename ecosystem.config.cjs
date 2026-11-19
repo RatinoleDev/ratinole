@@ -1,14 +1,14 @@
 // PM2 process file for the Hostinger VPS (HANDOFF section 3). Not deployed in Phase 1.
-// Secrets come from the server's .env (never committed). Put Nginx in front of
-// the web app on 3000; the API listens on 127.0.0.1:4000 and is reached through
-// the web app's /api rewrite.
+// Secrets come from the server's .env (never committed). Both servers listen on
+// 127.0.0.1 only; Nginx (deploy/nginx.conf) sends /api to 4000 and the rest to 3000.
+// Steps: docs/deploy.md.
 module.exports = {
   apps: [
     {
       name: "rationale-web",
       cwd: "apps/web",
       script: "node_modules/next/dist/bin/next",
-      args: "start -p 3000",
+      args: "start -p 3000 -H 127.0.0.1",
       env: { NODE_ENV: "production" },
     },
     {

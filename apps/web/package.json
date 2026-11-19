@@ -6,7 +6,8 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "playwright test --trace off"
   },
   "dependencies": {
     "@rationale/brain": "workspace:*",
@@ -19,6 +20,7 @@
     "wagmi": "2.19.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "22.20.5",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",

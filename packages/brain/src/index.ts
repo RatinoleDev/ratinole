@@ -14,3 +14,4 @@ export * from "./decide";
 export * from "./backtest/metrics";
 export * from "./backtest/simulate";
 export * from "./backtest/walkforward";
+export * from "./backtest/warnings";

@@ -1,5 +1,5 @@
 import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO } from "@rationale/config";
-import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY, LEADERBOARD } from "@rationale/config";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
@@ -549,7 +549,7 @@ export function Bento({ board, example }: { board: LeaderboardRowDTO[]; example:
               ) : (
                 <>
                   <span className="lbempty">No ranked agents yet</span>
-                  <small>Paper agents appear here once they have made decisions.</small>
+                  <small>Paper agents are ranked after {LEADERBOARD.minDaysToRank} days live.</small>
                 </>
               )}
             </div>

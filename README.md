@@ -17,7 +17,9 @@ apps/engine     BullMQ worker: hourly agent runs, backtests, candle feeds
 packages/brain  Plan/Decision types, intake validation, regime, evidence, guard, paper accounting, walk-forward backtester (pure, unit tested)
 packages/config Brand, chain, markets, paper settings, API response types
 packages/db     Prisma schema and client (PostgreSQL)
-docs/           Data sources and their limits
+docs/           Data sources, deployment guide
+deploy/         Nginx site config
+scripts/        Database backup and health check
 ```
 
 ## Run it locally
@@ -103,10 +105,40 @@ Then run every package's tests, one package at a time:
 pnpm test
 ```
 
-Type-check everything:
+Type-check and lint everything:
 
 ```bash
 pnpm typecheck
+```
+
+```bash
+pnpm lint
+```
+
+Browser smoke tests for the web app (build it first; the API is mocked):
+
+```bash
+pnpm --filter @rationale/web build
+```
+
+```bash
+pnpm --filter @rationale/web test:e2e
+```
+
+GitHub Actions runs all of the above on every push (`.github/workflows/ci.yml`).
+
+## Checking the strategy reader
+
+`apps/api/eval/cases.json` holds 28 realistic sentences (English and Indonesian,
+plus prompt-injection attempts) with the plan each should produce. With
+`ANTHROPIC_API_KEY` set, a dry run prints the worst-case cost; `--yes` spends it:
+
+```bash
+pnpm --filter @rationale/api eval:intake
+```
+
+```bash
+pnpm --filter @rationale/api eval:intake --yes
 ```
 
 ## How a decision is made
@@ -126,5 +158,8 @@ needed) on the first 60 days and scoring the last 30 days unseen.
 
 ## Deployment
 
-`ecosystem.config.cjs` describes the three PM2 processes for the VPS. Nothing has
-been deployed. Run exactly one engine.
+[docs/deploy.md](docs/deploy.md) walks through a VPS install: Postgres, Redis,
+PM2 (`ecosystem.config.cjs`), Nginx with TLS and rate limits
+(`deploy/nginx.conf`), daily backups (`scripts/backup-db.sh`) and a health check
+for cron (`scripts/healthcheck.sh`). Nothing has been deployed. Run exactly one
+engine.

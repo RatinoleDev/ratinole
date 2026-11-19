@@ -32,7 +32,7 @@ export default async function Landing() {
       <Product example={example} />
       <DecisionTape latest={latest} />
       <Thinks latest={latest} />
-      <Bento board={Array.isArray(board) ? board : []} example={example} />
+      <Bento board={Array.isArray(board) ? board.filter((r) => r.ranked) : []} example={example} />
       <Compare />
       <Safety />
       <Pricing />

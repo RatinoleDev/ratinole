@@ -1,5 +1,5 @@
 /** Maps stored rows to the shapes in packages/config/src/api.ts. */
-import { describePlan, paramsText, type AgentParams, type EvidenceItem, type GuardCheck, type Plan } from "@rationale/brain";
+import { backtestWarnings, describePlan, paramsText, type AgentParams, type EvidenceItem, type GuardCheck, type Plan } from "@rationale/brain";
 import { marketLabel, type AgentDTO, type BacktestDTO, type BacktestStatus, type CurvePointDTO, type DecisionDTO } from "@rationale/config";
 import type { Agent, AgentState, Backtest, Decision } from "@rationale/db";
 
@@ -66,6 +66,7 @@ export function backtestDTO(b: Backtest): BacktestDTO {
       tunedTrades: b.tunedTrades ?? 0,
       unseenTrades: b.unseenTrades ?? 0,
       paramsText: paramsText(plan, params),
+      warnings: backtestWarnings({ tunedTrades: b.tunedTrades ?? 0, unseenTrades: b.unseenTrades ?? 0 }),
       curve: (b.curve ?? []) as unknown as CurvePointDTO[],
     };
   }

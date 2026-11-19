@@ -3,7 +3,6 @@
  * futures marks, close to but not identical to spot. Returns at most the 5000
  * most recent candles.
  */
-import type { Candle } from "@rationale/brain";
 import { MARKETS, isMarketId } from "@rationale/config";
 import { FeedError, type CandleFeed } from "./types";
 

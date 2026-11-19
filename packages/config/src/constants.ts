@@ -46,6 +46,17 @@ export const RISK_DEFAULTS = {
   defaultSizePct: 25,
 } as const;
 
+/** Bounds a wallet may set for its own limits (settings page). */
+export const RISK_LIMITS = {
+  maxSizePct: { min: 1, max: 100 },
+  dailyLossCapPct: { min: 0.5, max: 20 },
+} as const;
+
+export const LEADERBOARD = {
+  /** Agents appear in the ranking only after this many days live. */
+  minDaysToRank: 7,
+} as const;
+
 export const BACKTEST = {
   /** Length of the scored window, in days of hourly candles. */
   days: 90,

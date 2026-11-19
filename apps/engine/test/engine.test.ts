@@ -1,7 +1,7 @@
 import { HOUR_MS, type Plan } from "@rationale/brain";
 import { prisma, type Prisma } from "@rationale/db";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { FreshDataPendingError, runAgentHours } from "../src/runAgent";
+import { FreshDataPendingError, recomputeStats, runAgentHours } from "../src/runAgent";
 import { ensureExample, runBacktest } from "../src/runBacktest";
 import { tick } from "../src/tick";
 import { fakeFeed, synthCandles } from "./fakes";
@@ -82,6 +82,44 @@ describe.skipIf(!hasDb)("runAgentHours", () => {
     // Warmup plus owed hours were fetched; only closed candles are saved (the forming one is not).
     expect(await prisma.candle.count()).toBe(748);
     expect(await prisma.candle.count({ where: { openTime: { gte: new Date(H0 + 3 * HOUR_MS) } } })).toBe(0);
+  });
+
+  it("keeps running stats in step with the stored decisions", async () => {
+    const agent = await makeAgent();
+    await runAgentHours(agent.id, H0 + 8 * HOUR_MS, { prisma, feeds, now: () => H0 + 8 * HOUR_MS + 60_000 });
+    const live = await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } });
+    const ds = await prisma.decision.findMany({ where: { agentId: agent.id }, orderBy: { hour: "asc" } });
+    expect(live.decisions).toBe(9);
+    expect(live.lastHour!.getTime()).toBe(H0 + 8 * HOUR_MS);
+    expect(live.lastEquity).toBeCloseTo(ds[8]!.equityAfter, 9);
+    expect(live.lastHoldingEquity).toBeCloseTo(ds[8]!.holdingEquityAfter, 9);
+    expect(live.peakEquity).toBeCloseTo(Math.max(10_000, ...ds.map((d) => d.equityAfter)), 9);
+    expect(live.maxDrawdownPct).toBeLessThanOrEqual(0);
+    // Wipe the stats and recompute them from the decisions: same numbers.
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { decisions: 0, peakEquity: null, maxDrawdownPct: 0, lastEquity: null } });
+    await recomputeStats(prisma);
+    const again = await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } });
+    expect(again.decisions).toBe(9);
+    expect(again.peakEquity).toBeCloseTo(live.peakEquity!, 9);
+    expect(again.maxDrawdownPct).toBeCloseTo(live.maxDrawdownPct, 9);
+    expect(again.lastEquity).toBeCloseTo(live.lastEquity!, 9);
+  });
+
+  it("stops when another worker has moved the agent on since its state was read", async () => {
+    const agent = await makeAgent();
+    const now = () => H0 + 3 * HOUR_MS + 60_000;
+    await runAgentHours(agent.id, H0 + HOUR_MS, { prisma, feeds, now });
+    // While this worker fetches candles (after reading the agent's state), another worker moves it on.
+    const racing = {
+      ...feeds[0]!,
+      async fetch(market: string, from: number, to: number) {
+        await prisma.agentState.update({ where: { agentId: agent.id }, data: { lastHour: new Date(H0 + 2 * HOUR_MS) } });
+        return feeds[0]!.fetch(market, from, to);
+      },
+    };
+    const res = await runAgentHours(agent.id, H0 + 3 * HOUR_MS, { prisma, feeds: [racing], now });
+    expect(res.decided).toBe(0);
+    expect(await prisma.decision.count({ where: { agentId: agent.id } })).toBe(2);
   });
 
   it("is idempotent and safe to run twice at once", async () => {
