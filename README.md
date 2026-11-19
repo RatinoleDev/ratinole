@@ -1,0 +1,130 @@
+# Rationale (working name)
+
+Trading agents that show their reasoning, on Robinhood Chain. This repository is
+**Phase 1: the site and paper trading** from [HANDOFF.md](HANDOFF.md). The visual
+source of truth is [prototype/rationale-v6.html](prototype/rationale-v6.html).
+
+The brand name and domain live in one place:
+[packages/config/src/brand.ts](packages/config/src/brand.ts) (the spelling is
+still the owner's decision, HANDOFF section 9).
+
+## Layout
+
+```
+apps/web        Next.js 14 site and app (landing + Overview, Agent Studio, My agents, Leaderboard, Vault, Payroll)
+apps/api        Fastify API: Sign-In with Ethereum, intake, backtests, agents, decisions, leaderboard, health
+apps/engine     BullMQ worker: hourly agent runs, backtests, candle feeds
+packages/brain  Plan/Decision types, intake validation, regime, evidence, guard, paper accounting, walk-forward backtester (pure, unit tested)
+packages/config Brand, chain, markets, paper settings, API response types
+packages/db     Prisma schema and client (PostgreSQL)
+docs/           Data sources and their limits
+```
+
+## Run it locally
+
+Requirements: Node 22 (22.9 or later), pnpm 10, PostgreSQL 16, Redis 7.
+
+1. Install dependencies:
+
+   ```bash
+   pnpm install
+   ```
+
+2. Create `.env` from the example and set `SESSION_SECRET` to a long random string:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   Leave `ANTHROPIC_API_KEY` empty to run without the strategy reader; Agent
+   Studio then says reading is switched off. With a key, intake uses
+   `LLM_MODEL` (default `claude-opus-5-5`) and stops for the month at
+   `LLM_MONTHLY_BUDGET_USD`.
+
+3. Start Postgres and Redis (or use local installs with the same URLs):
+
+   ```bash
+   pnpm dev:infra
+   ```
+
+4. Apply the database migrations:
+
+   ```bash
+   pnpm db:deploy
+   ```
+
+5. Start the engine, the API and the web app, each in its own terminal:
+
+   ```bash
+   pnpm dev:engine
+   ```
+
+   ```bash
+   pnpm dev:api
+   ```
+
+   ```bash
+   pnpm dev:web
+   ```
+
+6. Open http://localhost:3000. Health is at http://localhost:3000/api/health.
+
+The engine runs every active agent at minute 1 of each hour (`ENGINE_RUN_MINUTE`),
+catches up any hours it missed (marked late), and refreshes the landing page's
+example backtest daily. To run owed agents immediately without waiting:
+
+```bash
+pnpm --filter @rationale/engine tick
+```
+
+In a sandbox where outbound traffic goes through an HTTPS proxy, start the
+engine with `NODE_USE_ENV_PROXY=1` so Node's fetch uses it.
+
+## Tests
+
+The API and engine tests use a separate database named by `TEST_DATABASE_URL`
+(they wipe it) and Redis database 15. Create it once and apply migrations:
+
+```bash
+createdb rationale_test
+```
+
+```bash
+DATABASE_URL=postgresql://rationale:rationale@localhost:5432/rationale_test pnpm db:deploy
+```
+
+Then run every package's tests, one package at a time:
+
+```bash
+pnpm test
+```
+
+Type-check everything:
+
+```bash
+pnpm typecheck
+```
+
+## How a decision is made
+
+Each hour, for each active paper agent (HANDOFF 5.2, steps 1 to 4):
+
+1. **Sense**: hourly candles from Binance (Hyperliquid if Binance fails). See [docs/data-sources.md](docs/data-sources.md).
+2. **Regime**: trending, ranging or stressed from the 200-hour trend slope and realised volatility (`packages/brain/src/regime.ts`).
+3. **Weigh**: each entry or exit rule and three context signals (trend, volatility, volume) scored from -100 to +100, combined into a confidence from 0 to 100 (`evidence.ts`).
+4. **Guard**: fresh data, position size, daily loss cap, market stress (if the plan asks), pool depth. A veto always wins; limits on new risk never block an exit (`guard.ts`).
+
+The result is one `Decision` row per agent per hour, with evidence, guard checks and
+a plain-language explanation built from those facts. Trades fill at the next
+hour's opening price with a 0.1% cost. The backtester replays exactly this code
+over history, tuning only what the sentence left open (a lookback, the confidence
+needed) on the first 60 days and scoring the last 30 days unseen.
+
+## Deployment
+
+`ecosystem.config.cjs` describes the three PM2 processes for the VPS. Nothing has
+been deployed. Run exactly one engine.

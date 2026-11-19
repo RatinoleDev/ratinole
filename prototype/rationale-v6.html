@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rationale. Trading agents that show their reasoning</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --fog:#F3F1EC; --paper:#FCFBF8; --ink:#0B0B0C; --ink2:#4B4944; --ink3:#8A867D;
+  --line:#DEDAD0; --blue:#0B0B0C; --blue-soft:#E9E6DE; --gain:#0B8A5C; --gain-soft:#DDF3E7;
+  --loss:#D8433A; --loss-soft:#FBE4E1; --mark:#CDF545; --lime:#C6F432;
+  --display:"Bricolage Grotesque",system-ui,sans-serif; --body:"Instrument Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--fog);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--display);margin:0;letter-spacing:-.02em;line-height:1.05}
+p{margin:0}
+a{color:inherit}
+button{font-family:inherit;font-size:inherit;cursor:pointer}
+:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+.hide{display:none!important}
+mark{background:linear-gradient(transparent 12%,var(--mark) 12%,var(--mark) 88%,transparent 88%);color:inherit;padding:0 .15em;border-radius:2px}
+
+/* buttons */
+.btn{border:0;border-radius:999px;padding:.8em 1.4em;font-weight:600;background:var(--ink);color:#fff;transition:transform .12s,background .12s}
+.btn:hover{background:#2C2C2E}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--ink)}
+.btn.ghost:hover{background:var(--ink);color:#fff}
+.btn.blue{background:var(--lime);color:var(--ink)}
+.btn.blue:hover{background:#D6FF55}
+.btn.sm{padding:.5em 1em;font-size:14px}
+
+/* ---------- landing ---------- */
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:20;background:rgba(243,241,236,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:32px;height:84px}
+.logo{font-family:var(--display);font-weight:800;font-size:28px;letter-spacing:-.04em;display:flex;align-items:center;gap:9px;text-decoration:none}
+.logo i{width:24px;height:24px;border-radius:7px;background:var(--ink);position:relative;display:block}
+.logo i::after{content:"";position:absolute;left:5px;right:5px;top:9px;height:5px;background:var(--mark);border-radius:1px}
+.top nav{display:flex;gap:30px;margin-left:28px;margin-right:auto;font-weight:500;font-size:17px}
+.top nav a{text-decoration:none;color:var(--ink2)}
+.top nav a:hover{color:var(--ink)}
+
+.hero{padding:40px 0 96px;overflow:hidden}
+.hero .wrap{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:24px;align-items:center}
+.hero h1{font-size:clamp(46px,7.5vw,116px);font-weight:800;letter-spacing:-.05em;line-height:.9}
+.hero .lede{font-size:clamp(18px,1.7vw,23px);color:var(--ink2);margin:34px 0 36px;max-width:27em;line-height:1.45}
+.hero .cta{display:flex;gap:14px;flex-wrap:wrap}
+.hero .fine{margin-top:24px;font-size:14px;color:var(--ink3);max-width:36em}
+.btn.xl{padding:1.05em 1.9em;font-size:18px}
+.top-cta{display:flex;gap:10px;margin-left:8px}
+
+/* 3D mark */
+.stage{position:relative;height:580px;perspective:1500px}
+.rig{position:absolute;left:50%;top:44%;width:300px;height:300px;margin:-150px 0 0 -150px;scale:1.14;transform-style:preserve-3d;transform:rotateX(calc(57deg + var(--rx,0deg))) rotateZ(calc(-36deg + var(--rz,0deg)));transition:transform .5s cubic-bezier(.2,.7,.2,1)}
+.obj{position:absolute;inset:0;transform-style:preserve-3d;animation:bob 7s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateZ(0)}50%{transform:translateZ(26px)}}
+.obj i,.obj b{position:absolute;display:block}
+.obj i{inset:0;border-radius:70px}
+.obj i.top{background:linear-gradient(140deg,#6A6A70 0%,#2A2A2E 26%,#101012 55%,#000 100%);box-shadow:inset 0 0 0 2px rgba(255,255,255,.16),inset 20px 20px 46px rgba(255,255,255,.14),inset -18px -18px 44px rgba(0,0,0,.6)}
+.obj i.top::after{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(115deg,transparent 28%,rgba(255,255,255,.42) 43%,rgba(255,255,255,.06) 50%,transparent 58%)}
+.obj b{left:52px;right:52px;top:118px;height:64px;border-radius:22px}
+.obj b.top{background:linear-gradient(140deg,#F1FFB0,#C6F432 45%,#A6D80E);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.6)}
+.stage .shadow{position:absolute;left:50%;bottom:78px;width:420px;height:76px;margin-left:-210px;background:radial-gradient(closest-side,rgba(11,11,12,.42),transparent);filter:blur(10px)}
+.float{position:absolute;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:16px;padding:11px 16px;font-size:15px;font-weight:500;box-shadow:0 22px 44px -24px rgba(14,23,38,.45);display:flex;align-items:center;gap:9px;white-space:nowrap;animation:drift 9s ease-in-out infinite}
+.float b{font-family:var(--display);font-size:20px}
+.float s{display:block;width:70px;height:7px;border-radius:4px;background:var(--fog);position:relative;overflow:hidden}
+.float s::after{content:"";position:absolute;inset:0;width:var(--p);background:var(--blue);border-radius:4px}
+.f1{left:-2%;top:17%} .f2{right:-2%;top:57%;animation-delay:-3s} .f3{left:2%;bottom:6%;animation-delay:-6s}
+@keyframes drift{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+
+/* reasoning tape: the signature element */
+.tape{background:#fff;border:1px solid var(--line);border-radius:26px;box-shadow:0 40px 80px -44px rgba(11,11,12,.45);overflow:hidden}
+.tape-head{display:flex;align-items:center;gap:12px;padding:16px 22px;border-bottom:1px solid var(--line)}
+.tape-head b{font-family:var(--display);font-size:18px}
+.pill{font-size:13px;font-weight:600;padding:.25em .75em;border-radius:999px;background:var(--blue-soft);color:var(--blue)}
+.pill.gain{background:var(--gain-soft);color:var(--gain)} .pill.loss{background:var(--loss-soft);color:var(--loss)}
+.pill.plain{background:var(--fog);color:var(--ink2)}
+.tape-head .when{margin-left:auto;font-size:13px;color:var(--ink3)}
+.tape-body{padding:8px 22px 18px;min-height:372px}
+.step{display:grid;grid-template-columns:92px 1fr;gap:14px;padding:13px 0;border-bottom:1px dashed var(--line);opacity:0;transform:translateY(6px);transition:opacity .35s,transform .35s}
+.step.on{opacity:1;transform:none}
+.step:last-child{border-bottom:0}
+.step .k{font-size:13px;font-weight:600;color:var(--ink3);padding-top:2px}
+.step .v{font-size:15.5px}
+.weights{display:grid;gap:6px;margin-top:9px}
+.w{display:grid;grid-template-columns:118px 1fr 38px;gap:10px;align-items:center;font-size:13px;color:var(--ink2)}
+.w s{display:block;height:7px;border-radius:4px;background:var(--fog);text-decoration:none;position:relative;overflow:hidden}
+.w s::after{content:"";position:absolute;inset:0;width:var(--p);background:var(--c,var(--blue));border-radius:4px}
+.verdict{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--ink);color:#fff;padding:15px 22px;font-size:15px}
+.verdict b{font-family:var(--display);font-size:19px}
+.verdict span{color:#B5B2AA}
+
+.band{padding:112px 0;border-top:1px solid var(--line)}
+.band.paper{background:var(--paper)}
+.band h2{font-size:clamp(36px,5vw,68px);font-weight:800;letter-spacing:-.04em;line-height:.98;max-width:14em}
+.band .sub{font-size:20px;color:var(--ink2);margin-top:16px;max-width:38em}
+
+/* pipeline: a real sequence, so it is numbered */
+.pipe{display:grid;grid-template-columns:repeat(5,1fr);margin-top:56px;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:var(--paper)}
+.pipe div{padding:26px 22px 28px;border-right:1px solid var(--line);position:relative}
+.pipe div:nth-child(4){background:var(--ink);color:#fff}
+.pipe div:nth-child(4) em{color:var(--lime)}
+.pipe div:nth-child(4) p{color:#C9C6BE}
+.pipe div:last-child{border-right:0}
+.pipe em{font-style:normal;font-family:var(--display);font-weight:800;font-size:56px;color:var(--ink);line-height:1;display:block;margin-bottom:14px}
+.pipe h3{font-size:20px;margin-bottom:8px}
+.pipe p{font-size:14.5px;color:var(--ink2)}
+
+/* capabilities: alternating rows, not a card grid */
+.caps{margin-top:44px;border-top:1.5px solid var(--ink)}
+.cap{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);gap:40px;padding:32px 0;border-bottom:1px solid var(--line);align-items:baseline}
+.cap h3{font-size:28px}
+.cap p{color:var(--ink2);max-width:36em;font-size:18px}
+
+table{border-collapse:collapse;width:100%}
+.cmp{margin-top:40px;background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.cmp th,.cmp td{text-align:left;padding:15px 20px;border-bottom:1px solid var(--line);font-size:15px;vertical-align:top}
+.cmp thead th{font-family:var(--display);font-size:17px;background:var(--fog)}
+.cmp tr:last-child td{border-bottom:0}
+.cmp td:first-child{font-weight:600;width:22%}
+.cmp td:nth-child(2){color:var(--ink3);width:32%}
+.cmp th:last-child,.cmp td:last-child{background:#F3FBD6}
+
+.guard{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:64px;align-items:center}
+.rules{border:1px solid var(--line);border-radius:18px;background:var(--fog);padding:6px 22px}
+.rules div{display:flex;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid var(--line);font-size:15px}
+.rules div:last-child{border-bottom:0}
+.rules b{white-space:nowrap}
+
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:44px;border:1.5px solid var(--ink);border-radius:16px;overflow:hidden;background:var(--paper)}
+.plan{padding:30px 28px;border-right:1px solid var(--line)}
+.plan:last-child{border-right:0}
+.plan.hot{background:var(--ink);color:#fff}
+.plan.hot p,.plan.hot li{color:#C9C6BE}
+.plan h3{font-size:22px}
+.plan .price{font-family:var(--display);font-size:46px;font-weight:800;margin:12px 0 4px;letter-spacing:-.03em}
+.plan p{font-size:14.5px;color:var(--ink2)}
+.plan ul{margin:18px 0 0;padding-left:18px;font-size:15px;color:var(--ink2);display:grid;gap:7px}
+
+.final{padding:128px 0;background:var(--ink);color:#fff}
+.final h2{font-size:clamp(44px,7vw,104px);font-weight:800;letter-spacing:-.05em;line-height:.92;max-width:10em}
+.final p{color:#B5B2AA;font-size:19px;margin:20px 0 32px;max-width:32em}
+.final .btn{background:var(--lime);color:var(--ink);padding:1.05em 1.9em;font-size:18px}
+.final .btn:hover{background:#fff}
+footer{padding:32px 0 48px;font-size:14px;color:var(--ink3)}
+footer .wrap{display:flex;gap:28px;flex-wrap:wrap;justify-content:space-between}
+footer p{max-width:46em}
+
+/* ---------- app ---------- */
+#app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.rail{background:var(--paper);border-right:1px solid var(--line);padding:20px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
+.rail .logo{padding:6px 10px 22px}
+.rail button.nav{all:unset;box-sizing:border-box;width:100%;cursor:pointer;padding:10px 12px;border-radius:9px;font-weight:500;color:var(--ink2);display:flex;justify-content:space-between;align-items:center}
+.rail button.nav:hover{background:var(--fog);color:var(--ink)}
+.rail button.nav.on{background:var(--ink);color:#fff}
+.rail button.nav.on .count{background:var(--lime)}
+.rail button.nav:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.rail .count{font-size:12px;background:var(--mark);color:var(--ink);border-radius:999px;padding:1px 8px;font-weight:700}
+.rail .foot{margin-top:auto;font-size:13px;color:var(--ink3);padding:10px 12px}
+.rail .foot a{color:var(--ink2)}
+.main{padding:22px 34px 60px;min-width:0}
+.bar{display:flex;align-items:center;gap:12px;margin-bottom:26px;flex-wrap:wrap}
+.bar h1{font-size:30px;font-weight:700;margin-right:auto}
+.seg{display:inline-flex;background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px}
+.seg button{border:0;background:transparent;border-radius:999px;padding:.4em 1em;font-weight:600;font-size:14px;color:var(--ink2)}
+.seg button.on{background:var(--ink);color:#fff}
+.panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px}
+.panel h2{font-size:19px;font-weight:700;margin-bottom:4px}
+.panel .hint{font-size:14px;color:var(--ink3);margin-bottom:16px}
+.grid2{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:20px;align-items:start}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:20px}
+.kpi{padding:18px 22px;border-right:1px solid var(--line)}
+.kpi:last-child{border-right:0}
+.kpi small{color:var(--ink3);font-size:13.5px;display:block}
+.kpi b{font-family:var(--display);font-size:30px;letter-spacing:-.03em}
+.up{color:var(--gain)} .down{color:var(--loss)}
+svg.chart{width:100%;height:230px;display:block}
+.legend{display:flex;gap:18px;font-size:13.5px;color:var(--ink2);margin-top:8px}
+.legend i{display:inline-block;width:18px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.feed{display:grid;gap:0}
+.feed .row{padding:13px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+.feed .row:last-child{border-bottom:0}
+.feed .meta{display:flex;gap:8px;align-items:center;margin-bottom:4px;font-size:13px;color:var(--ink3)}
+.feed .meta b{color:var(--ink);font-size:14.5px}
+
+textarea,input[type=text],input[type=number],select{font:inherit;width:100%;border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;background:#fff;color:var(--ink)}
+textarea{min-height:104px;resize:vertical;font-size:17px;line-height:1.45}
+textarea:focus,input:focus,select:focus{border-color:var(--ink);outline:0;box-shadow:0 0 0 3px var(--mark)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 18px}
+.chip{border:1px solid var(--line);background:var(--fog);border-radius:999px;padding:.35em .9em;font-size:13.5px;color:var(--ink2)}
+.chip:hover{border-color:var(--ink);color:var(--ink)}
+.planbox{margin-top:20px;border-top:1.5px solid var(--ink);padding-top:18px}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:6px 16px;font-size:15px}
+.kv dt{color:var(--ink3)} .kv dd{margin:0;font-weight:500}
+.checks{margin-top:16px;display:grid;gap:8px;font-size:14.5px}
+.checks div{display:flex;gap:10px;align-items:baseline}
+.checks i{font-style:normal;font-weight:700;width:46px;flex:none}
+.bt{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:14px 0;border:1px solid var(--line);border-radius:10px}
+.bt div{padding:12px 14px;border-right:1px solid var(--line)}
+.bt div:last-child{border-right:0}
+.bt small{display:block;font-size:12.5px;color:var(--ink3)}
+.bt b{font-size:19px;font-family:var(--display)}
+
+.agent{border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:14px;overflow:hidden}
+.agent summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(0,3fr) 1fr 1fr 1fr auto;gap:16px;align-items:center;padding:18px 22px}
+.agent summary::-webkit-details-marker{display:none}
+.agent summary h3{font-size:19px}
+.agent summary small{display:block;color:var(--ink3);font-size:13px}
+.agent summary .val{font-weight:600}
+.agent .log{border-top:1px solid var(--line);padding:6px 22px 16px;background:#F7F5F0}
+.agent[open] summary .tog::after{content:"Hide reasoning"}
+.agent summary .tog::after{content:"Show reasoning"}
+.tog{font-size:14px;font-weight:600;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.lb td,.lb th{padding:13px 14px;border-bottom:1px solid var(--line);text-align:left;font-size:15px}
+.lb th{font-size:13.5px;color:var(--ink3);font-weight:600}
+.lb tr:last-child td{border-bottom:0}
+.lb td.r,.lb th.r{text-align:right}
+.ctrl{display:grid;gap:18px}
+.ctrl label{display:grid;gap:8px;font-weight:600;font-size:15px}
+.ctrl label span{display:flex;justify-content:space-between}
+input[type=range]{width:100%;accent-color:var(--blue)}
+.worst{background:var(--ink);color:#fff;border-radius:12px;padding:18px 20px;margin-top:6px}
+.worst b{font-family:var(--display);font-size:28px;display:block}
+.worst small{color:#B5B2AA}
+.perm td{padding:11px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+.perm td:not(:first-child){text-align:center;width:84px}
+.perm th{font-size:13px;color:var(--ink3);font-weight:600;padding-bottom:8px;text-align:center}
+.perm th:first-child{text-align:left}
+.yes{color:var(--gain);font-weight:700} .no{color:var(--ink3)}
+.addrow{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;margin-top:16px}
+.toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:12px 20px;border-radius:999px;font-weight:500;opacity:0;pointer-events:none;transition:.25s;z-index:50}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.sample{font-size:13px;color:var(--ink2);background:var(--mark);padding:.25em .8em;border-radius:999px;font-weight:600}
+
+@media (max-width:960px){
+  .hero .wrap,.guard,.grid2{grid-template-columns:1fr}
+  .pipe{grid-template-columns:1fr} .pipe div{border-right:0;border-bottom:1px solid var(--line)}
+  .cap{grid-template-columns:1fr;gap:6px}
+  .plans{grid-template-columns:1fr} .plan{border-right:0;border-bottom:1px solid var(--line)}
+  .top nav{display:none} .top-cta{margin-left:auto} .top-cta .ghost{display:none}
+  .stage{height:400px} .rig{scale:.7} .stage .shadow{scale:.68} .f1{top:4%} .f3{left:0;bottom:2%}
+  #app{grid-template-columns:1fr}
+  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--line)}
+  .rail .logo{width:100%;padding-bottom:8px} .rail button.nav{width:auto} .rail .foot{display:none}
+  .main{padding:18px}
+  .kpis{grid-template-columns:1fr 1fr} .kpi:nth-child(2){border-right:0} .kpi:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  .agent summary{grid-template-columns:1fr 1fr} .bt{grid-template-columns:1fr 1fr}
+  .addrow{grid-template-columns:1fr}
+  .cmp td:nth-child(2){display:none} .cmp th:nth-child(2){display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}.step{opacity:1;transform:none}.obj,.float{animation:none}}
+
+/* ===== v4 polish ===== */
+body{font-size:17px}
+.wrap{max-width:1200px}
+.top{position:sticky;top:14px;z-index:20;background:none;backdrop-filter:none;border:0;padding:0 20px;pointer-events:none}
+.capsule{pointer-events:auto;max-width:1160px;margin:14px auto 0;height:68px;display:flex;align-items:center;gap:8px;padding:0 12px 0 22px;background:rgba(255,255,255,.78);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(11,11,12,.08);border-radius:999px;box-shadow:0 1px 0 rgba(255,255,255,.9) inset,0 18px 40px -26px rgba(11,11,12,.35)}
+.capsule .logo{font-size:24px}
+.top nav{margin-left:34px;gap:6px;font-size:15.5px}
+.top nav a{padding:8px 14px;border-radius:999px;color:var(--ink2)}
+.top nav a:hover{background:rgba(11,11,12,.06);color:var(--ink)}
+.btn{box-shadow:0 1px 0 rgba(255,255,255,.18) inset}
+.btn.blue{box-shadow:0 1px 0 rgba(255,255,255,.7) inset,0 10px 24px -12px rgba(140,190,0,.9)}
+.btn.sm{padding:.62em 1.15em;font-size:15px}
+
+.hero{padding:44px 0 0;position:relative}
+.hero::before{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(11,11,12,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(11,11,12,.045) 1px,transparent 1px);background-size:56px 56px;mask-image:radial-gradient(ellipse 70% 70% at 70% 35%,#000 0%,transparent 72%);-webkit-mask-image:radial-gradient(ellipse 70% 70% at 70% 35%,#000 0%,transparent 72%);pointer-events:none}
+.hero .wrap{position:relative}
+.hero h1{font-size:clamp(46px,7.1vw,110px);font-weight:800;line-height:.92}
+.hero .lede{margin:30px 0 34px}
+.news{display:inline-flex;align-items:center;gap:10px;font-size:14.5px;font-weight:500;color:var(--ink2);text-decoration:none;background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 16px 5px 5px;margin-bottom:26px;box-shadow:0 8px 20px -14px rgba(11,11,12,.4)}
+.news b{background:var(--ink);color:var(--lime);border-radius:999px;padding:3px 10px;font-size:12.5px}
+.news:hover{border-color:var(--ink);color:var(--ink)}
+.stage .glow{position:absolute;left:50%;top:44%;width:520px;height:520px;margin:-260px 0 0 -260px;background:radial-gradient(closest-side,rgba(198,244,50,.55),rgba(198,244,50,.12) 55%,transparent 72%);filter:blur(8px)}
+.runs{display:flex;align-items:center;justify-content:space-between;gap:20px 28px;flex-wrap:wrap;margin-top:64px;padding:26px 0;border-top:1px solid var(--line);font-size:15px;color:var(--ink3)}
+.runs b{font-family:var(--display);font-size:20px;font-weight:700;color:#9C988E;letter-spacing:-.02em}
+
+.band{padding:128px 0;border-top:0}
+.band.paper{background:var(--paper);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.band h2{font-size:clamp(34px,4.6vw,62px);font-weight:700;letter-spacing:-.035em;line-height:1.02}
+.band .sub{font-size:19px;line-height:1.5}
+.center{text-align:center;display:grid;justify-items:center}
+.center .sub{max-width:34em}
+
+/* product preview */
+.browser{margin-top:56px;background:#fff;border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:0 2px 0 #fff inset,0 60px 120px -60px rgba(11,11,12,.45),0 24px 48px -32px rgba(11,11,12,.25)}
+.chrome{display:flex;align-items:center;gap:7px;padding:14px 18px;border-bottom:1px solid var(--line);background:#FAF9F6}
+.chrome i{width:11px;height:11px;border-radius:50%;background:#DDD9CF;display:block}
+.chrome span{margin:0 auto;font-size:13px;color:var(--ink3);background:#fff;border:1px solid var(--line);border-radius:8px;padding:4px 60px}
+.shot{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr)}
+.shot-l{padding:34px 38px;border-right:1px solid var(--line)}
+.shot-r{padding:34px 38px;background:#FCFBF8}
+.shot-label{font-size:13.5px;font-weight:600;color:var(--ink3);margin-bottom:10px}
+.shot-prompt{font-family:var(--display);font-size:25px;font-weight:600;letter-spacing:-.02em;line-height:1.25;padding:20px 22px;border:1.5px solid var(--ink);border-radius:16px;background:#fff;box-shadow:0 0 0 5px var(--mark)}
+.caret{display:inline-block;width:2px;height:1em;background:var(--ink);margin-left:3px;vertical-align:-.15em;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+.shot-pass{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
+.shot-pass span{font-size:13.5px;font-weight:600;background:var(--gain-soft);color:var(--gain);border-radius:999px;padding:5px 12px}
+.shot-nums{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:10px}
+.shot-nums small{display:block;font-size:13px;color:var(--ink3)}
+.shot-nums b{font-family:var(--display);font-size:28px;letter-spacing:-.03em}
+
+.tape{border-radius:28px}
+.pipe{background:#fff}
+
+/* bento */
+.bento{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:52px}
+.bento article{background:#fff;border:1px solid var(--line);border-radius:24px;padding:30px;display:flex;flex-direction:column;min-height:330px;transition:transform .25s,box-shadow .25s}
+.bento article:hover{transform:translateY(-3px);box-shadow:0 30px 50px -36px rgba(11,11,12,.4)}
+.bento h3{font-size:23px;margin-bottom:8px;letter-spacing:-.02em}
+.bento p{color:var(--ink2);font-size:16px}
+.bento .b-wide{grid-column:span 4;flex-direction:row;gap:48px;align-items:center;min-height:0;background:var(--ink);color:#fff;border-color:var(--ink)}
+.bento .b-wide>div:first-child{flex:1}
+.bento .b-wide h3{font-size:34px}
+.bento .b-wide p{color:#BDBAB2;font-size:18px;max-width:26em}
+.mini{margin-top:auto;padding-top:24px}
+.lbmini{flex:1;margin:0;padding:0;display:grid;gap:8px}
+.lbmini div{display:grid;grid-template-columns:1fr 60px 80px;align-items:center;background:#1A1A1C;border-radius:14px;padding:14px 18px;font-size:16px}
+.lbmini div span:nth-child(2){color:#8A867D}
+.lbmini div b{text-align:right;color:var(--lime);font-family:var(--display);font-size:19px}
+.lbmini small{color:#8A867D;font-size:13px;margin-top:4px}
+.mini.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mini.two div{border:1px solid var(--line);border-radius:14px;padding:14px}
+.mini.two .hl{background:var(--mark);border-color:var(--mark)}
+.mini.two small{display:block;font-size:13px;color:var(--ink2)} .mini.two b{font-family:var(--display);font-size:26px}
+.mini.bars{display:grid;gap:8px}
+.mini.bars div{position:relative;display:flex;justify-content:space-between;padding:9px 14px;border-radius:10px;background:var(--fog);font-size:14.5px;overflow:hidden}
+.mini.bars div::before{content:"";position:absolute;inset:0;width:var(--w);background:var(--mark)}
+.mini.bars span,.mini.bars b{position:relative}
+.mini.run b{font-family:var(--display);font-size:68px;letter-spacing:-.05em;line-height:1;display:block}
+.mini.run span{color:var(--ink2);font-size:15px}
+.mini.chat{display:grid;gap:8px}
+.mini.chat div{background:var(--fog);border-radius:16px 16px 16px 4px;padding:10px 14px;font-size:14.5px;max-width:92%}
+.mini.chat .me{background:var(--ink);color:#fff;border-radius:16px 16px 4px 16px;justify-self:end}
+
+.cmp{border-radius:22px;background:#fff}
+.cmp th,.cmp td{padding:18px 24px;font-size:16px}
+.rules{border-radius:22px;background:#fff;padding:8px 26px}
+.rules div{padding:17px 0;font-size:16px}
+
+.plans{border:0;gap:16px;background:none;overflow:visible;margin-top:56px;align-items:stretch}
+.plan{border:1px solid var(--line)!important;border-radius:24px;background:#fff;padding:34px 30px;display:flex;flex-direction:column;position:relative}
+.plan.hot{background:var(--ink);border-color:var(--ink)!important;transform:translateY(-10px);box-shadow:0 40px 70px -40px rgba(11,11,12,.6)}
+.plan .price small{font-size:17px;font-weight:500;letter-spacing:0;color:var(--ink3)}
+.plan.hot .price small{color:#BDBAB2}
+.plan ul{margin-bottom:28px}
+.plan .btn{margin-top:auto}
+.plan.hot .btn.blue{box-shadow:none}
+.tagp{position:absolute;top:22px;right:22px;background:var(--lime);color:var(--ink);font-size:12.5px;font-weight:700;border-radius:999px;padding:4px 11px}
+
+.faqwrap{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);gap:64px;align-items:start}
+.faq{border-top:1.5px solid var(--ink)}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{list-style:none;cursor:pointer;padding:22px 44px 22px 0;font-family:var(--display);font-size:22px;font-weight:600;letter-spacing:-.02em;position:relative}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";position:absolute;right:4px;top:16px;font-size:30px;font-weight:400;transition:transform .2s}
+.faq details[open] summary::after{transform:rotate(45deg)}
+.faq p{color:var(--ink2);padding:0 44px 24px 0;max-width:40em}
+
+.closing{padding:24px 0 96px}
+.closer{background:var(--lime);border-radius:36px;padding:96px 64px;position:relative;overflow:hidden}
+.closer::after{content:"";position:absolute;right:-120px;top:-120px;width:520px;height:520px;border-radius:50%;background:radial-gradient(closest-side,rgba(255,255,255,.75),transparent)}
+.closer h2{font-family:var(--display);font-size:clamp(40px,6.4vw,96px);font-weight:800;letter-spacing:-.05em;line-height:.93;max-width:11em;position:relative;z-index:1}
+.closer p{font-size:20px;margin:22px 0 34px;color:#2E3A00;position:relative;z-index:1}
+.closer .btn{position:relative;z-index:1}
+
+footer{padding:72px 0 40px;border-top:1px solid var(--line);font-size:15px;color:var(--ink2);overflow:hidden}
+footer .wrap{display:block}
+.fcols{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+.fcols p{margin-top:14px;max-width:20em;color:var(--ink3)}
+.fcols .logo{color:var(--ink)}
+.fcols b{display:block;color:var(--ink);margin-bottom:14px}
+.fcols a:not(.logo){display:block;text-decoration:none;color:var(--ink2);padding:5px 0}
+.fcols a:not(.logo):hover{color:var(--ink)}
+.wordmark{font-family:var(--display);font-weight:800;font-size:min(30vw,380px);letter-spacing:-.07em;line-height:.78;color:transparent;-webkit-text-stroke:1.5px var(--line);margin:56px 0 0 -.05em;user-select:none}
+.legal{font-size:13.5px;color:var(--ink3);max-width:none;margin-top:28px;padding-top:22px;border-top:1px solid var(--line)}
+
+@media (max-width:960px){
+  .capsule{height:60px;padding-left:18px}
+  .shot,.faqwrap{grid-template-columns:1fr} .shot-l{border-right:0;border-bottom:1px solid var(--line);padding:24px} .shot-r{padding:24px}
+  .shot-prompt{font-size:19px} .chrome span{padding:4px 16px}
+  .bento{grid-template-columns:1fr} .bento .b-wide{grid-column:auto;flex-direction:column;align-items:stretch;gap:24px} .bento article{min-height:0}
+  .plan.hot{transform:none} .band{padding:80px 0}
+  .closer{padding:56px 28px;border-radius:26px} .fcols{grid-template-columns:1fr 1fr}
+  .runs{gap:20px;margin-top:40px} .stage .glow{scale:.7}
+}
+.hero .wrap+.wrap{display:block}
+section[id]{scroll-margin-top:70px}
+@media (prefers-reduced-motion:reduce){.caret{animation:none}}
+
+/* ===== v5 ===== */
+.capsule .logo{font-size:23px}
+.wordmark{font-size:min(19.5vw,250px);letter-spacing:-.06em}
+.stage .ring{position:absolute;left:50%;top:46%;width:560px;height:560px;margin:-280px 0 0 -280px;border:1.5px solid rgba(11,11,12,.14);border-radius:50%;transform:rotateX(72deg) rotateZ(-18deg)}
+.stage .orb{position:absolute;right:6%;top:9%;width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#F6FFC2,#C6F432 45%,#7FA800 100%);box-shadow:0 18px 30px -12px rgba(110,150,0,.7);animation:drift 8s ease-in-out infinite}
+.hero .lede{font-size:clamp(18px,1.6vw,22px)}
+
+.ticker{margin-top:8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff;overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);-webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
+.track{display:flex;gap:14px;width:max-content;padding:16px 0;animation:slide 60s linear infinite}
+.ticker:hover .track{animation-play-state:paused}
+@keyframes slide{to{transform:translateX(-50%)}}
+.track span{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--ink2);white-space:nowrap;padding:8px 18px 8px 8px;border:1px solid var(--line);border-radius:999px;background:var(--paper)}
+.track span b{color:var(--ink)}
+.runs{margin-bottom:0}
+
+.think{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:28px;margin-top:56px;align-items:stretch}
+.think-nav{display:grid;gap:8px}
+.think-nav button{all:unset;box-sizing:border-box;cursor:pointer;display:flex;gap:18px;align-items:center;padding:18px 22px;border-radius:20px;border:1px solid transparent;transition:background .2s,border-color .2s}
+.think-nav button:hover{background:rgba(11,11,12,.04)}
+.think-nav button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.think-nav em{font-style:normal;font-family:var(--display);font-weight:800;font-size:22px;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:#fff;border:1px solid var(--line);flex:none}
+.think-nav span{color:var(--ink2);font-size:15.5px;line-height:1.35}
+.think-nav span b{display:block;font-family:var(--display);font-size:21px;color:var(--ink);letter-spacing:-.02em;margin-bottom:2px}
+.think-nav button.on{background:#fff;border-color:var(--line);box-shadow:0 20px 40px -30px rgba(11,11,12,.4)}
+.think-nav button.on em{background:var(--lime);border-color:var(--lime)}
+.think-view{background:#fff;border:1px solid var(--line);border-radius:28px;padding:38px;box-shadow:0 50px 90px -60px rgba(11,11,12,.5);min-height:440px}
+.tv{display:none} .tv.on{display:block;animation:tvin .35s ease}
+@keyframes tvin{from{opacity:0;transform:translateY(8px)}}
+.tv h3{font-size:26px;letter-spacing:-.025em;margin-bottom:24px;max-width:18em}
+.src{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.src div{border:1px solid var(--line);border-radius:16px;padding:14px 16px;background:var(--paper)}
+.src .full{grid-column:span 2;background:var(--mark);border-color:var(--mark)}
+.src small{display:block;font-size:13px;color:var(--ink2)} .src b{font-size:16.5px}
+.regime{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.regime div{border:1px solid var(--line);border-radius:18px;padding:22px 18px;background:var(--paper)}
+.regime b{font-family:var(--display);font-size:22px;display:block} .regime span{font-size:14.5px;color:var(--ink2)}
+.regime .pick{background:var(--ink);border-color:var(--ink);color:#fff} .regime .pick span{color:var(--lime)}
+.note{margin-top:22px;color:var(--ink2);font-size:16px;max-width:36em}
+.weights.big{gap:14px} .weights.big .w{grid-template-columns:130px 1fr 44px;font-size:16px;color:var(--ink)} .weights.big s{height:12px;border-radius:6px} .weights.big s::after{border-radius:6px}
+.gchk{display:grid;gap:10px}
+.gchk div{display:flex;gap:14px;align-items:center;border:1px solid var(--line);border-radius:16px;padding:14px 16px;font-size:16px;background:var(--paper)}
+.gchk i{font-style:normal;font-weight:700;font-size:13px;border-radius:999px;padding:4px 12px;flex:none}
+.gchk .ok{background:var(--gain-soft);color:var(--gain)} .gchk .bad{background:var(--loss);color:#fff}
+.say{background:var(--ink);color:#D8D5CD;border-radius:22px 22px 22px 6px;padding:22px 24px;font-size:16.5px;line-height:1.5}
+.say b{display:block;font-family:var(--display);font-size:21px;color:#fff;margin-bottom:6px}
+.say.rev{background:var(--mark);color:#2A3400;margin-top:12px;border-radius:22px 22px 6px 22px} .say.rev b{color:var(--ink)}
+
+/* app polish */
+#app{background:var(--fog);grid-template-columns:256px minmax(0,1fr)}
+.rail{background:#fff;padding:22px 16px}
+.rail .logo{font-size:22px;padding:6px 10px 26px}
+.rail button.nav{padding:12px 14px;border-radius:14px;font-size:16px}
+.main{padding:26px 40px 72px;max-width:1280px}
+.bar{margin-bottom:30px}
+.bar h1{font-size:38px;font-weight:800;letter-spacing:-.04em}
+.panel{border-radius:24px;padding:28px;box-shadow:0 30px 60px -50px rgba(11,11,12,.45)}
+.panel h2{font-size:22px;letter-spacing:-.02em}
+.kpis{border:0;background:none!important;gap:14px}
+.kpi{background:#fff;border:1px solid var(--line)!important;border-radius:22px;padding:22px 24px}
+.kpi b{font-size:36px}
+.kpi:first-child{background:var(--ink);border-color:var(--ink)!important;color:#fff} .kpi:first-child small{color:#A9A69E}
+.agent{border-radius:22px} .agent summary{padding:22px 26px} .agent .log{padding:8px 26px 18px}
+.seg{padding:4px} textarea{border-radius:16px;font-family:var(--display);font-size:21px;font-weight:600;letter-spacing:-.015em;padding:18px 20px;min-height:128px}
+.bt{border-radius:16px} .worst{border-radius:20px;padding:22px 24px} .worst b{font-size:36px}
+.lb td,.lb th{padding:16px 14px}
+.sample{background:#fff;border:1px solid var(--line);color:var(--ink2)}
+@media (max-width:960px){.think{grid-template-columns:1fr} .think-view{padding:24px;min-height:0} .src,.regime{grid-template-columns:1fr} .src .full{grid-column:auto} #app{grid-template-columns:1fr} .main{padding:18px} .stage .ring{scale:.62} .stage .orb{scale:.7}}
+@media (prefers-reduced-motion:reduce){.track,.orb{animation:none}}
+
+/* ===== v6: centered hero with a large showpiece ===== */
+.hero{padding:56px 0 0}
+.hero>.wrap:first-of-type{display:block;text-align:center}
+.hero-copy{display:grid;justify-items:center}
+.hero h1{font-size:clamp(44px,7.6vw,118px);line-height:.9;max-width:none}
+.hero .lede{max-width:33em;margin:30px auto 34px}
+.hero .cta{justify-content:center}
+.hero::before{mask-image:radial-gradient(ellipse 60% 55% at 50% 72%,#000 0%,transparent 75%);-webkit-mask-image:radial-gradient(ellipse 60% 55% at 50% 72%,#000 0%,transparent 75%)}
+.stage{height:640px;margin-top:-10px}
+.rig{top:50%;scale:1.62}
+.stage .glow{top:50%;width:820px;height:820px;margin:-410px 0 0 -410px}
+.stage .ring{top:52%;width:900px;height:900px;margin:-450px 0 0 -450px}
+.stage .shadow{bottom:36px;width:620px;height:96px;margin-left:-310px}
+.stage .orb{right:22%;top:12%;width:64px;height:64px}
+.float{font-size:16px;padding:13px 18px}
+.f1{left:11%;top:24%} .f2{right:9%;top:36%} .f3{left:15%;bottom:17%;top:auto} .f4{right:15%;bottom:22%;animation-delay:-2s} .f5{left:3%;top:52%;animation-delay:-5s}
+.runs{margin-top:0}
+@media (max-width:960px){.stage{height:420px;margin-top:10px} .rig{scale:.86} .stage .glow,.stage .ring{scale:.5} .stage .shadow{scale:.6} .f4,.f5{display:none} .f1{left:0;top:6%} .f2{right:0;top:auto;bottom:30%} .f3{left:2%;bottom:4%} .float{font-size:14px;padding:9px 13px}}
+</style>
+</head>
+<body>
+
+<!-- ======================= LANDING ======================= -->
+<div id="landing">
+  <header class="top"><div class="capsule">
+    <a class="logo" href="#"><i></i>Rationale</a>
+    <nav>
+      <a href="#product">Product</a>
+      <a href="#decision">Decisions</a>
+      <a href="#does">Features</a>
+      <a href="#safety">Safety</a>
+      <a href="#plans">Pricing</a>
+    </nav>
+    <div class="top-cta">
+      <button class="btn ghost sm" onclick="openApp()">Log in</button>
+      <button class="btn sm" onclick="openApp('studio')">Launch app</button>
+    </div>
+  </div></header>
+
+  <section class="hero"><div class="wrap">
+    <div class="hero-copy">
+      <a class="news" href="#plans"><b>New</b>Paper trading is open on Robinhood Chain</a>
+      <h1>Agents that think.<br>Money that stays yours.</h1>
+      <p class="lede">Describe a strategy in a sentence. Your agent reads price, order flow, liquidations and news, weighs the evidence, and trades from a vault only you can withdraw from.</p>
+      <div class="cta">
+        <button class="btn blue xl" onclick="openApp('studio')">Build your agent</button>
+        <a class="btn ghost xl" href="#decision" style="text-decoration:none">Read a decision</a>
+      </div>
+    </div>
+    <div class="stage" id="stage" aria-hidden="true">
+      <div class="glow"></div>
+      <div class="ring"></div><div class="orb"></div>
+      <div class="shadow"></div>
+      <div class="rig" id="rig"><div class="obj" id="obj"></div></div>
+      <div class="float f1"><span class="pill plain">Hold</span> Earnings in 2 days</div>
+      <div class="float f2"><b>71%</b> confident<s style="--p:71%"></s></div>
+      <div class="float f3"><span class="pill gain">Buy</span> Wallets added $2.1M</div>
+      <div class="float f4"><span class="pill plain">Regime</span> Trending up</div>
+      <div class="float f5"><span class="pill loss">Veto</span> Stop moved to break-even</div>
+    </div>
+  </div>
+  <div class="wrap"><div class="runs">
+    <span>Runs on</span><b>Robinhood Chain</b><b>Uniswap</b><b>Chainlink</b><b>Safe</b><b>Telegram</b>
+  </div></div>
+  <div class="ticker" aria-label="Sample decisions"><div class="track" id="track"></div></div>
+  </section>
+
+  <section class="band" id="product"><div class="wrap">
+    <div class="center">
+      <h2>Type a sentence. Get an agent.</h2>
+      <p class="sub">No templates and no sliders. Say what you want, check how it was understood, and test it on prices it has never seen.</p>
+    </div>
+    <div class="browser">
+      <div class="chrome"><i></i><i></i><i></i><span>rationale.trade/studio</span></div>
+      <div class="shot">
+        <div class="shot-l">
+          <div class="shot-label">Your strategy</div>
+          <div class="shot-prompt">Buy ETH when RSI drops below 30 in an uptrend, skip if there is bad news, take profit at 8% and stop at 4%<span class="caret"></span></div>
+          <div class="shot-label" style="margin-top:22px">How the agent understood it</div>
+          <dl class="kv">
+            <dt>Market</dt><dd>ETH / USDG</dd>
+            <dt>Buy when</dt><dd>RSI below 30, only while the long trend is rising</dd>
+            <dt>Sell when</dt><dd>+8% profit or −4% loss</dd>
+            <dt>Stands aside</dt><dd>When headline sentiment is negative</dd>
+          </dl>
+          <div class="shot-pass"><span>Has a loss limit</span><span>Has a reason to stand aside</span><span>Risk per trade under 35%</span></div>
+        </div>
+        <div class="shot-r">
+          <div class="shot-label">Backtest, 30 days</div>
+          <div class="shot-nums"><div><small>Unseen days</small><b class="up num">+3.8%</b></div><div><small>Holding</small><b class="num">+1.2%</b></div><div><small>Worst drop</small><b class="down num">−2.9%</b></div></div>
+          <svg class="chart" id="heroChart" viewBox="0 0 600 230" preserveAspectRatio="none"></svg>
+          <button class="btn blue" onclick="openApp('studio')" style="margin-top:16px;width:100%">Try it with your own sentence</button>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="band paper" id="decision"><div class="wrap">
+    <div class="guard">
+      <div>
+        <h2>Read one decision from start to finish.</h2>
+        <p class="sub">This is what you see for every trade your agent makes or refuses. What it saw, how it weighed it, and what stopped it.</p>
+      </div>
+      <div class="tape" aria-label="Example of an agent decision">
+        <div class="tape-head"><b>Halcyon</b><span class="pill">NVDA / USDG</span><span class="pill plain">Paper</span><span class="when">Sample decision</span></div>
+        <div class="tape-body" id="tape"></div>
+        <div class="verdict hide" id="verdict"><b>Hold. Do not buy yet.</b><span>Confidence 71%. Re-check when earnings have printed.</span></div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="band" id="thinks"><div class="wrap">
+    <h2>Five steps between a price tick and a trade.</h2>
+    <p class="sub">A rule bot checks one indicator and fires. Rationale runs the same five steps every time, and writes down what it found at each one.</p>
+    <div class="think">
+      <div class="think-nav" role="tablist" aria-label="Decision steps">
+        <button role="tab" class="on" data-s="0"><em>1</em><span><b>Sense</b>Gathers seven kinds of market evidence.</span></button>
+        <button role="tab" data-s="1"><em>2</em><span><b>Read the regime</b>Decides what kind of market this is.</span></button>
+        <button role="tab" data-s="2"><em>3</em><span><b>Weigh</b>Scores evidence for and against the trade.</span></button>
+        <button role="tab" data-s="3"><em>4</em><span><b>Guard</b>A separate risk check can veto.</span></button>
+        <button role="tab" data-s="4"><em>5</em><span><b>Explain and learn</b>Writes the reason, then reviews itself.</span></button>
+      </div>
+      <div class="think-view">
+        <div class="tv on">
+          <h3>What the agent is looking at right now</h3>
+          <div class="src">
+            <div><small>Price</small><b>3.4% below average</b></div><div><small>Volume</small><b>1.8 times normal</b></div>
+            <div><small>Funding</small><b>Negative for 9 hours</b></div><div><small>Open interest</small><b>Up 4% today</b></div>
+            <div><small>Liquidations</small><b>$180M cleared below</b></div><div><small>Wallet flow</small><b>$2.1M net buying</b></div>
+            <div class="full"><small>Headlines</small><b>12 read, 2 negative, earnings in 2 days</b></div>
+          </div>
+        </div>
+        <div class="tv">
+          <h3>The same rule behaves differently in each market</h3>
+          <div class="regime"><div class="pick"><b>Trending</b><span>Dip rules apply</span></div><div><b>Ranging</b><span>Fade the edges</span></div><div><b>Stressed</b><span>Stand aside</span></div></div>
+          <p class="note">The 200-hour trend is rising and volatility is normal, so this market is classed as trending.</p>
+        </div>
+        <div class="tv">
+          <h3>Evidence for and against buying</h3>
+          <div class="weights big"><div class="w">Dip depth<s style="--p:82%;--c:var(--gain)"></s>+82</div><div class="w">Wallet flow<s style="--p:64%;--c:var(--gain)"></s>+64</div><div class="w">Trend<s style="--p:58%;--c:var(--gain)"></s>+58</div><div class="w">Event risk<s style="--p:91%;--c:var(--loss)"></s>−91</div></div>
+          <p class="note">Three signals support the trade. One strong signal opposes it. Confidence in buying now: 29%.</p>
+        </div>
+        <div class="tv">
+          <h3>Four checks before any order is sent</h3>
+          <div class="gchk"><div><i class="ok">Pass</i>Position is 20% of cash, under your 35% cap</div><div><i class="ok">Pass</i>Daily loss so far is 0.4%, under your 3% cap</div><div><i class="ok">Pass</i>Pool can fill this size within 0.3%</div><div><i class="bad">Veto</i>Earnings in 2 days, and your rule avoids earnings week</div></div>
+          <p class="note">The vault contract enforces the price floor and daily limit even if this check fails.</p>
+        </div>
+        <div class="tv">
+          <h3>What you receive</h3>
+          <div class="say"><b>Hold. Do not buy yet.</b>The dip qualifies and large wallets are buying, but earnings are in 2 days and your rule says to avoid earnings week. I will check again after the results.</div>
+          <div class="say rev"><b>Weekly review</b>Three of my last four losses came from entries in high-impact news hours. I suggest skipping the hour before scheduled macro prints.</div>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="band paper" id="does"><div class="wrap">
+    <h2>One wallet, the whole desk.</h2>
+    <div class="bento">
+      <article class="b-wide">
+        <div><h3>Copy a proven agent</h3><p>The leaderboard ranks live agents by how much they beat holding, after fees. Copy one into your own vault with your own limits.</p></div>
+        <div class="mini lbmini">
+          <div><span>Tidewater</span><span>BTC</span><b class="up num">+9.3%</b></div>
+          <div><span>Kestrel Nine</span><span>ETH</span><b class="up num">+7.2%</b></div>
+          <div><span>Halcyon</span><span>NVDA</span><b class="up num">+5.2%</b></div>
+          <small>Edge over holding, sample data</small>
+        </div>
+      </article>
+      <article>
+        <h3>Backtests you can trust</h3><p>Tuned on one stretch of history, scored on a later one it never saw.</p>
+        <div class="mini two"><div><small>Tuned</small><b class="num">+6.1%</b></div><div class="hl"><small>Unseen</small><b class="num">+3.8%</b></div></div>
+      </article>
+      <article>
+        <h3>Portfolio agents</h3><p>Hold target weights across markets and rebalance on a schedule.</p>
+        <div class="mini bars"><div style="--w:50%"><span>ETH</span><b>50%</b></div><div style="--w:30%"><span>BTC</span><b>30%</b></div><div style="--w:20%"><span>SPY</span><b>20%</b></div></div>
+      </article>
+      <article>
+        <h3>Payroll from profits</h3><p>Pay your team in USDG or stock tokens, on schedule.</p>
+        <div class="mini run"><b class="num">3.4</b><span>months of payroll covered</span></div>
+      </article>
+      <article>
+        <h3>Telegram control</h3><p>Every decision as a message. Pause or ask why from your phone.</p>
+        <div class="mini chat"><div class="me">Why did you sell?</div><div>Price closed back above the short average. Target reached at +4.6%.</div></div>
+      </article>
+    </div>
+  </div></section>
+
+  <section class="band"><div class="wrap">
+    <h2>What changes when the agent can reason.</h2>
+    <div class="cmp"><table>
+      <thead><tr><th></th><th>Rule bots</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td>Inputs</td><td>Hourly closing price</td><td>Price, volume, funding, liquidations, wallet flows, news</td></tr>
+        <tr><td>Setting it up</td><td>Pick a template, move sliders</td><td>Write a sentence, review how it was understood</td></tr>
+        <tr><td>Market context</td><td>Same rule in every market</td><td>Reads the regime first and adapts or stands aside</td></tr>
+        <tr><td>Event risk</td><td>Unaware of earnings or macro prints</td><td>Knows the calendar and can wait</td></tr>
+        <tr><td>After a loss</td><td>Repeats the rule</td><td>Reviews closed trades weekly and proposes changes</td></tr>
+        <tr><td>Proof</td><td>Private log on a server</td><td>Each decision hashed on-chain, results ranked against holding</td></tr>
+      </tbody>
+    </table></div>
+  </div></section>
+
+  <section class="band paper" id="safety"><div class="wrap">
+    <div class="guard">
+      <div>
+        <h2>The agent trades. Only you withdraw.</h2>
+        <p class="sub">Your funds sit in a vault contract that belongs to your wallet. The agent's key can swap inside it and nothing else. If that key were ever stolen, the contract still caps what a day of bad trades could cost you.</p>
+      </div>
+      <div class="rules">
+        <div><span>Withdraw</span><b>You, any time, even when paused</b></div>
+        <div><span>Minimum price on every swap</span><b>Set by Chainlink, not by the agent</b></div>
+        <div><span>Daily trading limit</span><b>You choose it</b></div>
+        <div><span>Admin changes</span><b>Multisig, 3-day public delay</b></div>
+        <div><span>Decision record</span><b>Hashed on-chain each hour</b></div>
+        <div><span>Recovery wallet</span><b>Optional, set by you</b></div>
+      </div>
+    </div>
+  </div></section>
+
+  <section class="band" id="plans"><div class="wrap">
+    <div class="center">
+      <h2>Free to learn. Pay when it works.</h2>
+      <p class="sub">No subscription. The fee applies only to profit above your previous high.</p>
+    </div>
+    <div class="plans">
+      <div class="plan"><h3>Paper</h3><div class="price">$0</div><p>Practice at live prices.</p><ul><li>3 agents, $10,000 virtual each</li><li>Rule strategies and backtests</li><li>Public leaderboard</li></ul><button class="btn ghost" onclick="openApp('studio')">Start free</button></div>
+      <div class="plan hot"><span class="tagp">Real money</span><h3>Live</h3><div class="price">10%<small> of profit</small></div><p>Nothing in a losing month.</p><ul><li>Reasoning agents with news and flow data</li><li>Your own on-chain vault</li><li>Copy trading and Telegram</li></ul><button class="btn blue" onclick="openApp('vault')">Open a vault</button></div>
+      <div class="plan"><h3>Holder</h3><div class="price">5%<small> of profit</small></div><p>Hold the token to halve the fee.</p><ul><li>Everything in Live</li><li>Portfolio agents, 10 at once</li><li>Payroll with stock tokens</li></ul><button class="btn ghost" onclick="openApp()">See the token</button></div>
+    </div>
+  </div></section>
+
+  <section class="band paper"><div class="wrap faqwrap">
+    <h2>Questions people ask first.</h2>
+    <div class="faq">
+      <details open><summary>Can the agent take my money?</summary><p>No. The vault contract only lets the agent swap between approved tokens inside the vault. Withdrawals need your wallet.</p></details>
+      <details><summary>Will it make a profit?</summary><p>Nobody can promise that. What you get is a loss limit the contract enforces, a backtest scored on unseen days, and a public record of every decision.</p></details>
+      <details><summary>What does "reasoning" mean here?</summary><p>The agent gathers several kinds of evidence, scores them for and against the trade, and writes down why it acted or waited. A rule bot checks one indicator.</p></details>
+      <details><summary>What can it trade?</summary><p>ETH, BTC and tokenized US stocks against USDG on Robinhood Chain. Paper mode covers more markets, including perpetuals.</p></details>
+      <details><summary>What happens if Rationale goes offline?</summary><p>Your vault keeps working without us. You can withdraw directly from the contract on the block explorer.</p></details>
+    </div>
+  </div></section>
+
+  <section class="closing"><div class="wrap"><div class="closer">
+    <h2>Give it a sentence. Read what it does with it.</h2>
+    <p>Building and testing an agent takes about two minutes and no money.</p>
+    <button class="btn xl" onclick="openApp('studio')">Launch app</button>
+  </div></div></section>
+
+  <footer><div class="wrap">
+    <div class="fcols">
+      <div><a class="logo" href="#"><i></i>Rationale</a><p>Trading agents that show their reasoning, on Robinhood Chain.</p></div>
+      <div><b>Product</b><a href="#product">Agent Studio</a><a href="#does">Copy trading</a><a href="#does">Payroll</a><a href="#plans">Pricing</a></div>
+      <div><b>Trust</b><a href="#safety">Vault safety</a><a href="#">Contracts</a><a href="#">Security review</a><a href="#">Status</a></div>
+      <div><b>Community</b><a href="#">X</a><a href="#">Telegram</a><a href="#">GitHub</a><a href="#">Docs</a></div>
+    </div>
+    <div class="wordmark" aria-hidden="true">Rationale</div>
+    <p class="legal">This page is a design prototype and the figures shown are sample data. Trading crypto and tokenized stocks is risky and you can lose money. Past and backtested results do not predict future returns.</p>
+  </div></footer>
+</div>
+
+<!-- ======================= APP ======================= -->
+<div id="app" class="hide">
+  <aside class="rail">
+    <a class="logo" href="#" onclick="openLanding();return false"><i></i>Rationale</a>
+    <button class="nav on" data-v="overview">Overview</button>
+    <button class="nav" data-v="studio">Agent Studio</button>
+    <button class="nav" data-v="agents">My agents <span class="count" id="agentCount">2</span></button>
+    <button class="nav" data-v="board">Leaderboard</button>
+    <button class="nav" data-v="vault">Vault</button>
+    <button class="nav" data-v="payroll">Payroll</button>
+    <div class="foot">Prototype with sample data.<br><a href="#" onclick="openLanding();return false">Back to site</a></div>
+  </aside>
+
+  <main class="main">
+    <div class="bar">
+      <h1 id="viewTitle">Overview</h1>
+      <span class="sample">Sample data</span>
+      <div class="seg" role="group" aria-label="Mode"><button class="on" id="mPaper">Paper</button><button id="mLive">Live</button></div>
+      <button class="btn sm" id="wallet">Connect wallet</button>
+    </div>
+
+    <!-- overview -->
+    <section data-view="overview">
+      <div class="kpis">
+        <div class="kpi"><small>Portfolio value</small><b class="num">$21,486</b></div>
+        <div class="kpi"><small>Return since start</small><b class="num up">+7.4%</b></div>
+        <div class="kpi"><small>Holding would have made</small><b class="num">+3.1%</b></div>
+        <div class="kpi"><small>Worst drop so far</small><b class="num down">−4.2%</b></div>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h2>Your agents against simply holding</h2>
+          <p class="hint">Last 30 days, all agents combined.</p>
+          <svg class="chart" id="ovChart" viewBox="0 0 600 230" preserveAspectRatio="none"></svg>
+          <div class="legend"><span><i style="background:var(--blue)"></i>Agents</span><span><i style="background:var(--ink3)"></i>Holding</span></div>
+        </div>
+        <div class="panel">
+          <h2>Latest decisions</h2>
+          <p class="hint">Newest first.</p>
+          <div class="feed" id="ovFeed"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- studio -->
+    <section data-view="studio" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Describe your strategy</h2>
+          <p class="hint">Write it the way you would explain it to a trader. Name a market, when to buy, when to sell and how much to risk.</p>
+          <textarea id="prompt" aria-label="Strategy description">Buy ETH when RSI drops below 30 in an uptrend, skip if there is bad news, take profit at 8% and stop at 4%, use 25% per trade</textarea>
+          <div class="chips">
+            <button class="chip" data-p="Buy NVDA on a 3% dip while it is above its trend, avoid earnings week, stop at 5%, use 20% per trade">Dip buyer on NVDA</button>
+            <button class="chip" data-p="Follow whales into BTC when funding is negative and liquidations spike, trailing stop 6%, use 30% per trade">Whale follower on BTC</button>
+            <button class="chip" data-p="Keep 50% ETH, 30% BTC and 20% SPY, rebalance weekly, pause if the market is stressed">Balanced portfolio</button>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn blue" id="understand">Understand and backtest</button>
+            <button class="btn ghost hide" id="launch">Launch in paper mode</button>
+          </div>
+          <div class="planbox hide" id="planbox">
+            <h2>How the agent understood it</h2>
+            <p class="hint">Edit your sentence and run again if anything here is wrong.</p>
+            <dl class="kv" id="kv"></dl>
+            <div class="checks" id="checks"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Backtest</h2>
+          <p class="hint" id="btHint">Run a strategy to see how it would have done.</p>
+          <div id="btOut" class="hide">
+            <div class="bt">
+              <div><small>Tuned on, 20 days</small><b class="num" id="btIn">–</b></div>
+              <div><small>Unseen, 10 days</small><b class="num" id="btOutS">–</b></div>
+              <div><small>Holding</small><b class="num" id="btHold">–</b></div>
+              <div><small>Worst drop</small><b class="num down" id="btDd">–</b></div>
+            </div>
+            <svg class="chart" id="btChart" viewBox="0 0 600 230" preserveAspectRatio="none"></svg>
+            <div class="legend"><span><i style="background:var(--blue)"></i>Strategy</span><span><i style="background:var(--ink3)"></i>Holding</span><span><i style="background:var(--mark);height:10px"></i>Unseen days</span></div>
+            <p class="hint" style="margin:14px 0 0">Judge it by the unseen number. A strategy that only wins on the days it was tuned on is curve-fitted.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- agents -->
+    <section data-view="agents" class="hide"><div id="agentList"></div></section>
+
+    <!-- leaderboard -->
+    <section data-view="board" class="hide">
+      <div class="panel">
+        <h2>Agents ranked against holding</h2>
+        <p class="hint">Live agents only. Ranked by how much they beat holding the same market since launch, after fees.</p>
+        <table class="lb"><thead><tr><th>Agent</th><th>Market</th><th class="r">Return</th><th class="r">Holding</th><th class="r">Edge</th><th class="r">Worst drop</th><th class="r">Days live</th><th></th></tr></thead><tbody id="lb"></tbody></table>
+      </div>
+    </section>
+
+    <!-- vault -->
+    <section data-view="vault" class="hide">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Limits the contract enforces</h2>
+          <p class="hint">The agent cannot change these. Only your wallet can.</p>
+          <div class="ctrl">
+            <label><span>Daily trading limit <b class="num" id="limV">$500</b></span><input type="range" id="lim" min="50" max="5000" step="50" value="500"></label>
+            <label><span>Maximum slippage against the oracle <b class="num" id="slipV">1.0%</b></span><input type="range" id="slip" min="0.1" max="5" step="0.1" value="1"></label>
+            <div class="worst"><small>Most a stolen agent key could cost you per day</small><b class="num" id="worst">$9.00</b><small>Daily limit × (slippage + 0.3% pool fee + 0.5% oracle lag). You stop it by pausing.</small></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn sm" id="pause">Pause vault</button><button class="btn sm ghost" id="revoke">Revoke agent access</button><button class="btn sm ghost" id="wd">Withdraw</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Who can do what</h2>
+          <p class="hint">Balance in vault: <b class="num">1,240.00 USDG</b></p>
+          <table class="perm"><thead><tr><th></th><th>You</th><th>Agent</th><th>Anyone</th></tr></thead><tbody>
+            <tr><td>Withdraw</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+            <tr><td>Swap inside the vault</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td></tr>
+            <tr><td>Change limits</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+            <tr><td>Pause or revoke</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+            <tr><td>Move the vault to a new wallet</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- payroll -->
+    <section data-view="payroll" class="hide">
+      <div class="kpis">
+        <div class="kpi"><small>Payroll balance</small><b class="num" id="pBal">$6,400</b></div>
+        <div class="kpi"><small>Monthly cost</small><b class="num" id="pCost">–</b></div>
+        <div class="kpi"><small>Covers</small><b class="num" id="pRun">–</b></div>
+        <div class="kpi"><small>Next payment</small><b class="num">In 3 days</b></div>
+      </div>
+      <div class="panel">
+        <h2>People you pay</h2>
+        <p class="hint">Payments go only to these addresses, for these amounts, once per period.</p>
+        <table class="lb"><thead><tr><th>Name</th><th>Wallet</th><th>Schedule</th><th class="r">Amount</th><th></th></tr></thead><tbody id="pay"></tbody></table>
+        <div class="addrow">
+          <input type="text" id="pName" placeholder="Name" aria-label="Name">
+          <input type="number" id="pAmt" placeholder="Amount in USDG" aria-label="Amount in USDG">
+          <select id="pSch" aria-label="Schedule"><option>Monthly</option><option>Every 2 weeks</option><option>Weekly</option></select>
+          <button class="btn sm" id="pAdd">Add person</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2200)}
+
+/* ---- view switching ---- */
+const titles={overview:'Overview',studio:'Agent Studio',agents:'My agents',board:'Leaderboard',vault:'Vault',payroll:'Payroll'};
+function show(v){$$('[data-view]').forEach(s=>s.classList.toggle('hide',s.dataset.view!==v));$$('.rail .nav').forEach(b=>b.classList.toggle('on',b.dataset.v===v));$('#viewTitle').textContent=titles[v];window.scrollTo(0,0)}
+function openApp(v){$('#landing').classList.add('hide');$('#app').classList.remove('hide');show(v||'overview')}
+function openLanding(){$('#app').classList.add('hide');$('#landing').classList.remove('hide');window.scrollTo(0,0)}
+$$('.rail .nav').forEach(b=>b.onclick=()=>show(b.dataset.v));
+$('#mPaper').onclick=()=>{$('#mPaper').classList.add('on');$('#mLive').classList.remove('on')};
+$('#mLive').onclick=()=>{$('#mLive').classList.add('on');$('#mPaper').classList.remove('on');toast('Live mode needs a funded vault')};
+$('#wallet').onclick=e=>{e.target.textContent='0x7a3F…91c2';toast('Wallet connected')};
+
+/* ---- hero reasoning tape ---- */
+const tape=[
+ ['Strategy','Buy NVDA on a 3% dip while it is above its trend. Avoid earnings week.'],
+ ['Sense','Price is <mark>3.4% below</mark> its 20-hour average. Volume is 1.8 times normal. Large wallets added <mark>$2.1M</mark> of NVDA tokens in 6 hours.'],
+ ['Regime','Trending up. The 200-hour trend is rising, so the dip rule applies.'],
+ ['Weigh','<div class="weights"><div class="w">Dip depth<s style="--p:82%;--c:var(--gain)"></s>+82</div><div class="w">Wallet flow<s style="--p:64%;--c:var(--gain)"></s>+64</div><div class="w">Trend<s style="--p:58%;--c:var(--gain)"></s>+58</div><div class="w">Event risk<s style="--p:91%;--c:var(--loss)"></s>−91</div></div>'],
+ ['Guard','<mark>Earnings are in 2 days.</mark> Your rule says to avoid earnings week, and the price can gap past a stop when the market is closed.']
+];
+(function(){const box=$('#tape');const still=matchMedia('(prefers-reduced-motion:reduce)').matches;
+ const steps=tape.map(([k,v])=>{const d=document.createElement('div');d.className='step';d.innerHTML=`<div class="k">${k}</div><div class="v">${v}</div>`;box.appendChild(d);return d});
+ const play=()=>{steps.forEach((d,i)=>setTimeout(()=>d.classList.add('on'),still?0:200+i*750));setTimeout(()=>$('#verdict').classList.remove('hide'),still?0:200+steps.length*750)};
+ if('IntersectionObserver' in window){const io=new IntersectionObserver(e=>{if(e[0].isIntersecting){play();io.disconnect()}},{threshold:.3});io.observe(box)}else play()})();
+
+/* ---- 3D mark: stacked layers make a rounded extrusion ---- */
+(function(){const o=$('#obj');if(!o)return;let html='';
+ const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t)),rgb=c=>`rgb(${c})`;
+ const N=44;for(let n=0;n<N;n++)html+=`<i style="transform:translateZ(${n*2}px);background:${rgb(mix([0,0,0],[38,38,42],Math.pow(n/N,2)))}"></i>`;
+ html+=`<i class="top" style="transform:translateZ(${N*2}px)"></i>`;
+ const M=12;for(let n=1;n<=M;n++)html+=`<b style="transform:translateZ(${N*2+n*2}px);background:${rgb(mix([110,150,0],[176,222,20],n/M))}"></b>`;
+ html+=`<b class="top" style="transform:translateZ(${N*2+M*2+2}px)"></b>`;o.innerHTML=html;
+ const st=$('#stage'),rig=$('#rig');
+ st.addEventListener('pointermove',e=>{const r=st.getBoundingClientRect();rig.style.setProperty('--rz',((e.clientX-r.left)/r.width-.5)*26+'deg');rig.style.setProperty('--rx',-((e.clientY-r.top)/r.height-.5)*16+'deg')});
+ st.addEventListener('pointerleave',()=>{rig.style.setProperty('--rz','0deg');rig.style.setProperty('--rx','0deg')})})();
+
+
+/* ---- ticker + thinking steps ---- */
+(function(){const T=[['Buy','gain','Tidewater','Funding negative 9 hours, whales buying BTC'],['Hold','plain','Halcyon','NVDA dip qualifies, earnings in 2 days'],['Sell','loss','Kestrel Nine','ETH back above its short average, +4.6%'],['Hold','plain','Quiet Harbor','SPY feed paused for the weekend'],['Buy','gain','Longshore','SOL oversold in a rising trend'],['Hold','plain','Meridian','Market classed as stressed, standing aside'],['Sell','loss','Tidewater','Trailing stop reached, +2.3% kept']];
+ const row=T.map(t=>`<span><i class="pill ${t[1]}" style="font-style:normal">${t[0]}</i><b>${t[2]}</b>${t[3]}</span>`).join('');$('#track').innerHTML=row+row;
+ const tabs=$$('.think-nav button'),views=$$('.tv');tabs.forEach(b=>b.onclick=()=>{tabs.forEach(x=>x.classList.toggle('on',x===b));views.forEach((v,i)=>v.classList.toggle('on',i==b.dataset.s))})})();
+
+/* ---- charts ---- */
+function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function series(seed,drift,vol,n=60){const r=rng(seed);let v=100;const a=[v];for(let i=1;i<n;i++){v*=1+drift+(r()-.5)*vol;a.push(v)}return a}
+function draw(svg,a,b,split){const all=a.concat(b),mn=Math.min(...all),mx=Math.max(...all),W=600,H=230,p=14;
+ const x=i=>i/(a.length-1)*W,y=v=>H-p-(v-mn)/(mx-mn||1)*(H-2*p);
+ const path=s=>s.map((v,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)).join(' ');
+ let h='';for(let g=0;g<4;g++){const yy=p+g*(H-2*p)/3;h+=`<line x1="0" x2="${W}" y1="${yy}" y2="${yy}" stroke="#E6E2D9" stroke-width="1"/>`}
+ if(split){const sx=x(Math.floor(a.length*split));h+=`<rect x="${sx}" y="0" width="${W-sx}" height="${H}" fill="#CDF545" opacity=".32"/>`}
+ h+=`<path d="${path(b)}" fill="none" stroke="#A29E94" stroke-width="2" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/><path d="${path(a)}" fill="none" stroke="#0B0B0C" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+ svg.innerHTML=h}
+function fit(s,t){const n=s.length-1,k=(1+t/100)/(s[n]/s[0]);return s.map((v,i)=>v*(1+(k-1)*i/n))}
+draw($('#heroChart'),fit(series(4,.0016,.017),6.9),fit(series(77,.0005,.026),1.2),2/3);
+draw($('#ovChart'),fit(series(11,.0014,.018),7.4),fit(series(29,.0006,.026),3.1));
+
+/* ---- agents ---- */
+const agents=[
+ {name:'Halcyon',market:'NVDA / USDG',mode:'Paper',ret:5.9,hold:2.2,status:'Waiting',log:[
+   ['Hold','11:00','Dip of 3.4% qualifies, but earnings are in 2 days. Your rule says to avoid earnings week.'],
+   ['Buy','Mon 15:00','Price 3.1% under the 20-hour average in a rising trend. Large wallets were net buyers. Used 20% of cash.'],
+   ['Sell','Fri 19:00','Bounced back above the short average. Closed for +4.6%.']]},
+ {name:'Tidewater',market:'BTC / USDG',mode:'Paper',ret:8.8,hold:4.0,status:'In position',log:[
+   ['Hold','11:00','In position at +2.3%. Funding turned positive, so the edge is fading. Trailing stop moved up to break-even.'],
+   ['Buy','Tue 03:00','Funding negative for 9 hours and a $180M liquidation cluster cleared below price. Whale wallets were buying. Used 30% of cash.'],
+   ['Review','Sunday','Three of my last four losses came from buying into high-impact news hours. I suggest skipping entries 1 hour before scheduled macro prints.']]}
+];
+function tag(a){return a==='Buy'?'gain':a==='Sell'?'loss':a==='Review'?'':'plain'}
+function renderAgents(){$('#agentCount').textContent=agents.length;
+ $('#agentList').innerHTML=agents.map(a=>`<details class="agent"${a===agents[0]?' open':''}><summary>
+  <div><h3>${a.name}</h3><small>${a.market}, ${a.mode}</small></div>
+  <div><small>Return</small><span class="val num ${a.ret>=0?'up':'down'}">${a.ret>=0?'+':''}${a.ret.toFixed(1)}%</span></div>
+  <div><small>Holding</small><span class="val num">${a.hold>=0?'+':''}${a.hold.toFixed(1)}%</span></div>
+  <div><small>Status</small><span class="val">${a.status}</span></div><span class="tog"></span></summary>
+  <div class="log feed">${a.log.map(l=>`<div class="row"><div class="meta"><span class="pill ${tag(l[0])}">${l[0]}</span><span>${l[1]}</span></div>${l[2]}</div>`).join('')}</div></details>`).join('');
+ $('#ovFeed').innerHTML=agents.flatMap(a=>a.log.slice(0,2).map(l=>`<div class="row"><div class="meta"><b>${a.name}</b><span class="pill ${tag(l[0])}">${l[0]}</span><span>${l[1]}</span></div>${l[2]}</div>`)).join('')}
+renderAgents();
+
+/* ---- studio: read the sentence ---- */
+const MK=['BTC','ETH','SOL','NVDA','TSLA','AAPL','MSFT','AMZN','GOOGL','META','SPY','QQQ','COIN'];
+function understand(t){const s=t.toUpperCase(),low=t.toLowerCase();
+ const mk=MK.filter(m=>new RegExp('\\b'+m+'\\b').test(s));
+ const num=re=>{const m=low.match(re);return m?parseFloat(m[1]):null};
+ const p={markets:mk,entry:[],exit:[],filters:[],size:num(/(\d+(?:\.\d+)?)\s*%\s*per trade/),stop:num(/stop (?:at |loss (?:at )?)?(\d+(?:\.\d+)?)\s*%/),tp:num(/(?:take profit|sell half|profit) (?:at )?\+?(\d+(?:\.\d+)?)\s*%/),trail:num(/trailing stop (?:of |at )?(\d+(?:\.\d+)?)\s*%/)};
+ const rsi=num(/rsi (?:drops |falls |is )?(?:below|under) (\d+)/); if(rsi)p.entry.push('RSI below '+rsi);
+ const dip=num(/(\d+(?:\.\d+)?)\s*% dip/); if(dip)p.entry.push('Price dips '+dip+'% under its short average'); else if(/dip|oversold/.test(low)&&!rsi)p.entry.push('Price is oversold');
+ if(/uptrend|above its trend|above trend/.test(low))p.entry.push('Only while the long trend is rising');
+ if(/whale/.test(low))p.entry.push('Large wallets are net buyers');
+ if(/funding/.test(low))p.entry.push('Funding rate is negative');
+ if(/liquidation/.test(low))p.entry.push('A liquidation cluster has just cleared');
+ if(/rebalance/.test(low)){p.entry.push('Rebalance to target weights '+(/weekly/.test(low)?'weekly':'monthly'));const w=[...low.matchAll(/(\d+)\s*%\s*([a-z]{2,5})/g)].map(m=>m[1]+'% '+m[2].toUpperCase());if(w.length)p.weights=w.join(', ')}
+ if(/news/.test(low))p.filters.push('Skip when headline sentiment is negative');
+ if(/earnings/.test(low))p.filters.push('No new entries in earnings week');
+ if(/stressed|crash/.test(low))p.filters.push('Stand aside when the market is stressed');
+ if(p.tp)p.exit.push('Take profit at +'+p.tp+'%'); if(p.stop)p.exit.push('Stop loss at −'+p.stop+'%'); if(p.trail)p.exit.push('Trailing stop '+p.trail+'%');
+ return p}
+function hash(t){let h=7;for(const c of t)h=(h*31+c.charCodeAt(0))|0;return Math.abs(h)}
+let lastPlan=null;
+$('#understand').onclick=()=>{const t=$('#prompt').value.trim();const p=understand(t);lastPlan=p;
+ const rows=[['Market',p.markets.length?p.markets.map(m=>m+' / USDG').join(', '):'<span class="down">Not found. Name a market such as ETH or NVDA.</span>'],
+  ['Buy when',p.entry.join('<br>')||'<span class="down">Not found. Say when to buy.</span>'],
+  ['Sell when',p.exit.join('<br>')||(p.weights?'Handled by rebalancing':'<span class="down">No exit given. A 5% stop will be added.</span>')],
+  ['Stands aside',p.filters.join('<br>')||'No filters given'],
+  ['Size per trade',p.size?p.size+'% of cash':p.weights?p.weights:'25% of cash (default)']];
+ $('#kv').innerHTML=rows.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('');
+ const ok=p.markets.length&&p.entry.length;
+ const c=[[ok,'Strategy is complete enough to run'],[!!(p.stop||p.trail||p.weights),'Has a loss limit'],[p.filters.length>0,'Has a reason to stand aside'],[(p.size||25)<=35,'Risk per trade is 35% or less']];
+ $('#checks').innerHTML=c.map(x=>`<div><i class="${x[0]?'up':'down'}">${x[0]?'Pass':'Check'}</i>${x[1]}</div>`).join('');
+ $('#planbox').classList.remove('hide');
+ if(!ok){$('#btOut').classList.add('hide');$('#btHint').textContent='Add the missing parts to run a backtest.';$('#launch').classList.add('hide');return}
+ const h=hash(t),r=rng(h),edge=.0006+r()*.0016+(p.filters.length*.0003),a=series(h,edge,.016),b=series(h+5,.0007,.027);
+ const cut=Math.floor(a.length*2/3),pc=(s,i,j)=>((s[j]/s[i]-1)*100);
+ let peak=a[0],dd=0;a.forEach(v=>{peak=Math.max(peak,v);dd=Math.min(dd,v/peak-1)});
+ const f=v=>(v>=0?'+':'')+v.toFixed(1)+'%',set=(id,v)=>{const e=$(id);e.textContent=f(v);e.className='num '+(v>=0?'up':'down')};
+ set('#btIn',pc(a,0,cut));set('#btOutS',pc(a,cut,a.length-1));$('#btHold').textContent=f(pc(b,0,b.length-1));$('#btDd').textContent=(dd*100).toFixed(1)+'%';
+ draw($('#btChart'),a,b,2/3);$('#btOut').classList.remove('hide');$('#btHint').textContent='30 days of hourly prices. Sample result for the prototype.';
+ $('#launch').classList.remove('hide');lastPlan.ret=pc(a,0,a.length-1);lastPlan.hold=pc(b,0,b.length-1)};
+$$('.chip').forEach(c=>c.onclick=()=>{$('#prompt').value=c.dataset.p;$('#understand').click()});
+const NAMES=['Meridian','Larkspur','Northing','Calloway','Ember Bay','Solstice'];
+$('#launch').onclick=()=>{const p=lastPlan;if(!p)return;const name=NAMES[agents.length%NAMES.length];
+ agents.unshift({name,market:p.markets.map(m=>m+' / USDG').join(', '),mode:'Paper',ret:0,hold:0,status:'Watching',log:[['Hold','Just now','Launched in paper mode with $10,000. I will check the market every hour and explain each decision here.']]});
+ renderAgents();$('#launch').classList.add('hide');toast(name+' launched in paper mode');show('agents')};
+
+/* ---- leaderboard ---- */
+const LB=[['Tidewater','BTC',18.4,9.1,6.2,41],['Kestrel Nine','ETH',14.9,7.7,5.1,38],['Halcyon','NVDA',11.2,6.0,3.9,29],['Quiet Harbor','SPY',6.3,3.8,1.7,52],['Longshore','SOL',9.7,8.2,9.4,23]];
+$('#lb').innerHTML=LB.map(r=>`<tr><td><b>${r[0]}</b></td><td>${r[1]} / USDG</td><td class="r num up">+${r[2]}%</td><td class="r num">+${r[3]}%</td><td class="r num up">+${(r[2]-r[3]).toFixed(1)}%</td><td class="r num down">−${r[4]}%</td><td class="r num">${r[5]}</td><td class="r"><button class="btn sm ghost cp">Copy</button></td></tr>`).join('');
+$$('.cp').forEach(b=>b.onclick=()=>{const on=b.textContent==='Copy';b.textContent=on?'Copying':'Copy';b.classList.toggle('ghost',!on);toast(on?'Copying with your own limits':'Stopped copying')});
+
+/* ---- vault ---- */
+function vault(){const l=+$('#lim').value,s=+$('#slip').value;$('#limV').textContent='$'+l.toLocaleString();$('#slipV').textContent=s.toFixed(1)+'%';$('#worst').textContent='$'+(l*(s+.3+.5)/100).toFixed(2)}
+$('#lim').oninput=vault;$('#slip').oninput=vault;vault();
+$('#pause').onclick=e=>{const p=e.target.textContent==='Pause vault';e.target.textContent=p?'Resume vault':'Pause vault';toast(p?'Vault paused. No swaps can happen.':'Vault resumed')};
+$('#revoke').onclick=e=>{const p=e.target.textContent==='Revoke agent access';e.target.textContent=p?'Give agent access':'Revoke agent access';toast(p?'Agent access revoked':'Agent access restored')};
+$('#wd').onclick=()=>toast('Connect a wallet to withdraw');
+
+/* ---- payroll ---- */
+const people=[['Dimas','0x4b1e…a07c','Monthly',1200],['Sari','0x9f22…3d18','Every 2 weeks',450],['Raka','0xc7a0…51ee','Weekly',150]];
+const perMonth={Monthly:1,'Every 2 weeks':26/12,Weekly:52/12};
+function pay(){$('#pay').innerHTML=people.map((p,i)=>`<tr><td><b>${p[0]}</b></td><td class="num">${p[1]}</td><td>${p[2]}</td><td class="r num">${p[3].toLocaleString()} USDG</td><td class="r"><button class="btn sm ghost" data-rm="${i}">Remove</button></td></tr>`).join('');
+ const cost=people.reduce((s,p)=>s+p[3]*perMonth[p[2]],0);$('#pCost').textContent='$'+Math.round(cost).toLocaleString();$('#pRun').textContent=cost?(6400/cost).toFixed(1)+' months':'–';
+ $$('[data-rm]').forEach(b=>b.onclick=()=>{const n=people.splice(+b.dataset.rm,1)[0][0];pay();toast('Removed '+n)})}
+$('#pAdd').onclick=()=>{const n=$('#pName').value.trim(),a=+$('#pAmt').value;if(!n||!(a>0)){toast('Enter a name and an amount');return}
+ people.push([n,'0x'+hash(n).toString(16).padStart(4,'0').slice(0,4)+'…'+hash(n+a).toString(16).padStart(4,'0').slice(0,4),$('#pSch').value,a]);$('#pName').value='';$('#pAmt').value='';pay();toast('Added '+n)};
+pay();
+</script>
+</body>
+</html>

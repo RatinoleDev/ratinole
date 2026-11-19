@@ -1,0 +1,203 @@
+// Every number shown to a user is read from these tables (HANDOFF section 8).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  /// Lower-case 0x address.
+  address         String    @unique
+  /// Cap on size per trade, percent of cash.
+  maxSizePct      Float     @default(35)
+  dailyLossCapPct Float     @default(3)
+  createdAt       DateTime  @default(now())
+  sessions        Session[]
+  agents          Agent[]
+  backtests       Backtest[]
+}
+
+model Session {
+  /// Random 32-byte hex id, stored in a signed httpOnly cookie.
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+}
+
+model Agent {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  sentence     String
+  /// The confirmed Plan (packages/brain types.ts).
+  plan         Json
+  /// Settings chosen by the backtest tuner (AgentParams).
+  params       Json
+  market       String
+  mode         String      @default("paper")
+  /// "active" | "paused"
+  status       String      @default("active")
+  startingCash Float
+  /// Wallet limits copied at launch so later changes do not rewrite history.
+  maxSizePct      Float
+  dailyLossCapPct Float
+  backtestId   String?
+  backtest     Backtest?   @relation(fields: [backtestId], references: [id], onDelete: SetNull)
+  launchedAt   DateTime    @default(now())
+  /// First hour boundary the engine owes a decision for since launch or the
+  /// last resume. Hours while paused are not owed and never backfilled.
+  owedFrom     DateTime
+  /// Price used for the holding benchmark (first fill price), set by the first decision.
+  holdEntryPrice Float?
+  createdAt    DateTime    @default(now())
+  state        AgentState?
+  decisions    Decision[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+/// Paper position after the latest decision.
+model AgentState {
+  agentId        String    @id
+  agent          Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  cash           Float
+  qty            Float
+  avgEntry       Float?
+  peak           Float?
+  lastBuyAt      DateTime?
+  dayStart       DateTime
+  dayStartEquity Float
+  updatedAt      DateTime  @updatedAt
+}
+
+model Decision {
+  id                 String   @id @default(cuid())
+  agentId            String
+  agent              Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  /// The hour boundary this decision is for.
+  hour               DateTime
+  action             String
+  confidence         Int
+  regime             String
+  evidence           Json
+  guard              Json
+  explanation        String
+  txHash             String?
+  /// Made after the fact by catch-up rather than on time.
+  late               Boolean  @default(false)
+  fillSide           String?
+  fillPrice          Float?
+  fillQty            Float?
+  fillNotional       Float?
+  fillFee            Float?
+  cashAfter          Float
+  qtyAfter           Float
+  equityAfter        Float
+  holdingEquityAfter Float
+  markPrice          Float
+  /// e.g. "binance:ETHUSDT"
+  candleSource       String
+  /// Open time of the last closed candle used.
+  candleTime         DateTime
+  createdAt          DateTime @default(now())
+
+  @@unique([agentId, hour])
+  @@index([hour])
+}
+
+model Backtest {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// "user" | "example"
+  kind        String   @default("user")
+  sentence    String
+  plan        Json
+  market      String
+  /// "queued" | "running" | "done" | "failed"
+  status      String   @default("queued")
+  error       String?
+  source      String?
+  label       String   @default("Price signals only")
+  /// Wallet limits used for the run.
+  maxSizePct      Float
+  dailyLossCapPct Float
+  costPct     Float
+  startCash   Float
+  params      Json?
+  fromTime    DateTime?
+  splitTime   DateTime?
+  toTime      DateTime?
+  candles     Int?
+  tunedReturnPct   Float?
+  unseenReturnPct  Float?
+  holdingTunedPct  Float?
+  holdingUnseenPct Float?
+  maxDrawdownPct   Float?
+  tunedTrades Int?
+  unseenTrades Int?
+  /// Downsampled equity curve [{t, strategy, holding}], 100 = start.
+  curve       Json?
+  /// Full walk-forward output for audit.
+  detail      Json?
+  createdAt   DateTime @default(now())
+  finishedAt  DateTime?
+  agents      Agent[]
+
+  @@index([kind, status, createdAt])
+  @@index([userId])
+}
+
+/// Closed hourly candles, cached so decisions and backtests can be reproduced.
+model Candle {
+  market   String
+  source   String
+  openTime DateTime
+  open     Float
+  high     Float
+  low      Float
+  close    Float
+  volume   Float
+  fetchedAt DateTime @default(now())
+
+  @@id([market, source, openTime])
+}
+
+model EngineRun {
+  id         String    @id @default(cuid())
+  hour       DateTime
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  agents     Int       @default(0)
+  decisions  Int       @default(0)
+  late       Int       @default(0)
+  errors     Int       @default(0)
+  detail     Json?
+
+  @@index([hour])
+}
+
+model LlmUsage {
+  id           String   @id @default(cuid())
+  at           DateTime @default(now())
+  userId       String?
+  model        String
+  purpose      String
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float
+  ok           Boolean
+
+  @@index([at])
+}

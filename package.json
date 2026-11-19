@@ -1,0 +1,20 @@
+{
+  "name": "rationale",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:infra": "docker compose up -d postgres redis",
+    "db:migrate": "pnpm --filter @rationale/db migrate:dev",
+    "db:deploy": "pnpm --filter @rationale/db migrate:deploy",
+    "db:generate": "pnpm --filter @rationale/db generate",
+    "dev:api": "pnpm --filter @rationale/api dev",
+    "dev:engine": "pnpm --filter @rationale/engine dev",
+    "dev:web": "pnpm --filter @rationale/web dev",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  }
+}

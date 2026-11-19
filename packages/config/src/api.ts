@@ -1,0 +1,192 @@
+/**
+ * Shapes the API returns and the web app reads. Every number in these shapes is
+ * read from a stored record (Decision, Backtest, Agent) or computed from them.
+ * All times are ISO 8601 strings in UTC.
+ */
+import type { Decision, Plan } from "@rationale/brain";
+
+export interface PlanRowDTO {
+  label: string;
+  lines: string[];
+  /** "missing" rows are shown in the loss colour (the prototype's "Not found" rows). */
+  tone?: "missing";
+}
+export interface PlanCheckDTO {
+  pass: boolean;
+  label: string;
+}
+
+export interface MeDTO {
+  address: string;
+  maxSizePct: number;
+  dailyLossCapPct: number;
+  agentCount: number;
+  maxAgents: number;
+}
+
+export type IntakeErrorCode =
+  | "rephrase"
+  | "unsupported_market"
+  | "unsupported_signal"
+  | "unsupported_kind"
+  | "size_over_cap"
+  | "llm_unavailable"
+  | "budget_exhausted"
+  | "rate_limited";
+
+export type IntakeResponse =
+  | {
+      ok: true;
+      plan: Plan;
+      rows: PlanRowDTO[];
+      checks: PlanCheckDTO[];
+      /** Things changed or assumed while reading the sentence, e.g. "A 5% stop loss was added." */
+      notes: string[];
+      /** Parts of the plan that cannot be checked yet, e.g. the news filter. */
+      notChecked: string[];
+    }
+  | { ok: false; code: IntakeErrorCode; message: string };
+
+export type BacktestStatus = "queued" | "running" | "done" | "failed";
+
+export interface CurvePointDTO {
+  t: string;
+  /** Strategy equity, 100 = starting cash. */
+  strategy: number;
+  /** Buy-and-hold equity, 100 = starting cash. */
+  holding: number;
+}
+
+export interface BacktestDTO {
+  id: string;
+  status: BacktestStatus;
+  error?: string;
+  sentence: string;
+  plan: Plan;
+  market: string;
+  marketLabel: string;
+  /** e.g. "Binance ETHUSDT hourly" */
+  source: string;
+  /** Always "Price signals only" in Phase 1. */
+  label: string;
+  createdAt: string;
+  result?: {
+    from: string;
+    split: string;
+    to: string;
+    candles: number;
+    costPct: number;
+    tunedDays: number;
+    unseenDays: number;
+    tunedReturnPct: number;
+    unseenReturnPct: number;
+    holdingTunedPct: number;
+    holdingUnseenPct: number;
+    /** Worst peak-to-trough drop on the unseen days, as a negative percent. */
+    maxDrawdownPct: number;
+    tunedTrades: number;
+    unseenTrades: number;
+    /** Plain-language lines describing what the tuner chose. */
+    paramsText: string[];
+    curve: CurvePointDTO[];
+  };
+}
+
+export interface FillDTO {
+  side: "buy" | "sell";
+  price: number;
+  qty: number;
+  notional: number;
+  fee: number;
+}
+
+export interface DecisionDTO extends Decision {
+  id: string;
+  /** The hour boundary this decision belongs to. */
+  hour: string;
+  /** True when the engine ran this hour after the fact (catch-up). */
+  late: boolean;
+  fill: FillDTO | null;
+  equityAfter: number;
+  holdingEquityAfter: number;
+  markPrice: number;
+  candleSource: string;
+  agentName: string;
+  /** The agent's strategy sentence. */
+  strategy: string;
+  market: string;
+  marketLabel: string;
+}
+
+export interface AgentDTO {
+  id: string;
+  name: string;
+  market: string;
+  marketLabel: string;
+  mode: "paper";
+  status: "active" | "paused";
+  sentence: string;
+  plan: Plan;
+  rows: PlanRowDTO[];
+  paramsText: string[];
+  backtestId: string | null;
+  launchedAt: string;
+  startingCash: number;
+  /** null until the first decision is stored. */
+  equity: number | null;
+  returnPct: number | null;
+  holdingPct: number | null;
+  inPosition: boolean;
+  decisions: number;
+  lastDecisionAt: string | null;
+}
+
+export interface OverviewDTO {
+  agentCount: number;
+  /** null when the wallet has no agent with a stored decision yet. */
+  kpis: {
+    equity: number;
+    returnPct: number;
+    holdingPct: number;
+    maxDrawdownPct: number;
+  } | null;
+  /** Combined equity of all agents vs holding, last 30 days, 100 = start. */
+  series: CurvePointDTO[];
+  latest: DecisionDTO[];
+}
+
+export interface LeaderboardRowDTO {
+  agentId: string;
+  name: string;
+  market: string;
+  marketLabel: string;
+  mode: "paper";
+  returnPct: number;
+  holdingPct: number;
+  edgePct: number;
+  maxDrawdownPct: number;
+  daysLive: number;
+  decisions: number;
+}
+
+export interface ExampleDTO {
+  sentence: string;
+  rows: PlanRowDTO[];
+  checks: PlanCheckDTO[];
+  backtest: BacktestDTO | null;
+}
+
+export interface HealthDTO {
+  ok: boolean;
+  engine: { lastHeartbeat: string | null; lastTick: string | null };
+  activeAgents: number;
+  /** Agent-hours with no stored decision, older than the grace period. */
+  missedHours: number;
+  /** Decisions made after the fact by catch-up. */
+  lateDecisions: number;
+}
+
+export interface ApiError {
+  error: string;
+  message: string;
+}
