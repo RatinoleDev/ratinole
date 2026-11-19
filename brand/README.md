@@ -18,6 +18,8 @@ hour; the lime facet is the decision. Light falls from the top left.
 | `svg/ratinole-logo-dark-bg.svg`, `png/ratinole-logo-dark-bg-2400.png` | Crystal and name, for dark backgrounds |
 | `svg/ratinole-logo-dark-bg-tile.svg` | Icon tile and name, for dark backgrounds |
 | `svg/ratinole-wordmark-black.svg`, `svg/ratinole-wordmark-white.svg` (+ PNG) | The name alone |
+| `x/ratinole-x-header-1500x500.png` (+ `-3000x1000.jpg`) | X header with the headline; text and crystal stay clear of the profile picture and the mobile crop |
+| `x/ratinole-x-header-minimal-1500x500.png` (+ `-3000x1000.jpg`) | X header with the logo only |
 
 The lettering is converted to outlines, so no font is needed to open the files.
 The crystal's seams are cut out, so the background shows through them.
