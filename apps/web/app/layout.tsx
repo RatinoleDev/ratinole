@@ -1,4 +1,4 @@
-import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, X_HANDLE } from "@rationale/config";
 import type { Metadata, Viewport } from "next";
 import { Bricolage_Grotesque, Instrument_Sans } from "next/font/google";
 import type { ReactNode } from "react";
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
   applicationName: BRAND_NAME,
   alternates: { canonical: "/" },
   openGraph: { type: "website", url: "/", siteName: BRAND_NAME, title, description: BRAND_TAGLINE, locale: "en_US" },
-  twitter: { card: "summary_large_image", title, description: BRAND_TAGLINE },
+  twitter: { card: "summary_large_image", site: `@${X_HANDLE}`, creator: `@${X_HANDLE}`, title, description: BRAND_TAGLINE },
 };
 
 export const viewport: Viewport = {

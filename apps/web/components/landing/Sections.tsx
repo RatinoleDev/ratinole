@@ -1,5 +1,5 @@
 import type { DecisionDTO, ExampleDTO, MarketDTO } from "@rationale/config";
-import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY, X_HANDLE, X_URL } from "@rationale/config";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
@@ -17,7 +17,7 @@ import {
   upDown,
   withoutLeadingAction,
 } from "../../lib/format";
-import { BrandMark, BrandWordmark } from "../Brand";
+import { BrandMark, BrandWordmark, XIcon } from "../Brand";
 import { Crystal3D } from "./Crystal3D";
 import { TapeBody } from "./Tape";
 import { ThinkTabs } from "./ThinkTabs";
@@ -71,6 +71,9 @@ export function Nav({ base = "" }: { base?: string }) {
           <a href={`${base}#plans`}>Pricing</a>
         </nav>
         <div className="top-cta">
+          <a className="xlink" href={X_URL} target="_blank" rel="noopener noreferrer" aria-label={`${BRAND_NAME} on X`}>
+            <XIcon />
+          </a>
           <Link className="btn ghost sm" href="/app">
             Log in
           </Link>
@@ -772,6 +775,10 @@ export function Footer() {
           <div>
             <Logo />
             <p>{BRAND_TAGLINE}</p>
+            <a className="xfollow" href={X_URL} target="_blank" rel="noopener noreferrer">
+              <XIcon size={14} />
+              Follow @{X_HANDLE}
+            </a>
           </div>
           <div>
             <b>Product</b>

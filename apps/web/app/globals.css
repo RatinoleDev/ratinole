@@ -842,3 +842,12 @@ body:has(#landing){background:#070708}
 #landing .c-hold{stroke:#6E6B64}
 #landing .c-strat{stroke:#F3F1EC}
 #landing .c-split{fill:#C6F432;opacity:.14}
+
+/* link to the official X account */
+.xlink{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:50%;color:var(--ink);box-shadow:inset 0 0 0 1.5px rgba(11,11,12,.18);transition:background .15s,color .15s}
+.xlink:hover{background:var(--ink);color:#fff}
+#landing .xlink{color:#F3F1EC;box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
+#landing .xlink:hover{background:rgba(255,255,255,.1);color:#fff}
+.xfollow{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:7px 14px;border-radius:999px;font-size:14px;font-weight:600;text-decoration:none;color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+.xfollow:hover{box-shadow:inset 0 0 0 1px var(--ink)}
+.fcols a.xfollow{display:inline-flex;padding:7px 14px;color:var(--ink)}
