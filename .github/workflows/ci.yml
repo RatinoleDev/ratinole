@@ -53,6 +53,9 @@ jobs:
         run: pnpm test
       - name: Build the web app
         run: pnpm --filter @rationale/web build
+        env:
+          # No API in CI: the landing page renders its empty states.
+          API_INTERNAL_URL: http://127.0.0.1:9
       - name: Install a browser for smoke tests
         run: pnpm --filter @rationale/web exec playwright install --with-deps chromium
       - name: Web smoke tests

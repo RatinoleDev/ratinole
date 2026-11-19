@@ -14,6 +14,9 @@ describe("describeCondition", () => {
     expect(describeCondition({ signal: "change_pct", op: "<", value: -5 })).toBe("Price fell more than 5% in the last 24 hours");
     expect(describeCondition({ signal: "from_high_pct", op: "<", value: -5, window: 72 })).toBe("Price is more than 5% below its 72-hour high");
     expect(describeCondition({ signal: "volume_ratio", op: ">", value: 2 })).toBe("Volume is above 2× its 24-hour average");
+    expect(describeCondition({ signal: "funding_rate", op: "<", value: 0 })).toBe("Funding is negative");
+    expect(describeCondition({ signal: "funding_rate", op: "crosses_below", value: 0, window: 24 })).toBe("Funding turns negative (24-hour average)");
+    expect(describeCondition({ signal: "funding_rate", op: ">", value: 0.03 })).toBe("Funding is above +0.03% per 8 hours");
   });
 });
 

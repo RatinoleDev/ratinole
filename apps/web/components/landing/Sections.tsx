@@ -46,7 +46,7 @@ function Weights({ d, big = false }: { d: DecisionDTO; big?: boolean }) {
   );
 }
 
-const NOT_COLLECTED = ["Funding", "Open interest", "Liquidations", "Wallet flow", "Headlines"];
+const NOT_COLLECTED = ["Open interest", "Liquidations", "Wallet flow", "Headlines"];
 
 const REGIME_TEXT: Record<string, string> = {
   trending: "Price is moving one way",
@@ -56,17 +56,18 @@ const REGIME_TEXT: Record<string, string> = {
 
 /* ---------- nav ---------- */
 
-export function Nav() {
+/** `base` is "/" on pages other than the landing page, so section links lead back to it. */
+export function Nav({ base = "" }: { base?: string }) {
   return (
     <header className="top">
       <div className="capsule">
         <Logo />
         <nav>
-          <a href="#product">Product</a>
-          <a href="#decision">Decisions</a>
-          <a href="#does">Features</a>
-          <a href="#safety">Safety</a>
-          <a href="#plans">Pricing</a>
+          <a href={`${base}#product`}>Product</a>
+          <a href={`${base}#decision`}>Decisions</a>
+          <a href={`${base}#does`}>Features</a>
+          <a href={`${base}#safety`}>Safety</a>
+          <a href={`${base}#plans`}>Pricing</a>
         </nav>
         <div className="top-cta">
           <Link className="btn ghost sm" href="/app">
@@ -434,6 +435,10 @@ export function Thinks({ latest: d }: { latest: DecisionDTO | null }) {
               <small>Volume</small>
               <b>Read every hour</b>
             </div>
+            <div>
+              <small>Funding</small>
+              <b>Read every hour</b>
+            </div>
           </>
         )}
         {NOT_COLLECTED.map((n) => (
@@ -666,7 +671,7 @@ export function Compare() {
           </table>
         </div>
         <p className="cmpnote">
-          Paper agents read price and volume today. Funding, liquidations, wallet flows and news are being added.
+          Paper agents read price, volume and funding today. Open interest, liquidations, wallet flows and news are being added.
         </p>
       </div>
     </section>
@@ -837,13 +842,13 @@ export function Footer() {
             <b>Product</b>
             <Link href="/app/studio">Agent Studio</Link>
             <Link href="/app/leaderboard">Leaderboard</Link>
-            <a href="#plans">Pricing</a>
+            <a href="/#plans">Pricing</a>
           </div>
           <div>
             <b>Trust</b>
-            <a href="#safety">Vault safety</a>
-            <a href="#decision">Read a decision</a>
-            <a href="#thinks">How it decides</a>
+            <a href="/#safety">Vault safety</a>
+            <a href="/#decision">Read a decision</a>
+            <a href="/#thinks">How it decides</a>
           </div>
           <div>
             <b>App</b>
@@ -857,7 +862,12 @@ export function Footer() {
         </div>
         <p className="legal">
           Paper trading uses virtual money. Trading crypto and tokenized stocks is risky and you can lose money. Past and
-          backtested results do not predict future returns.
+          backtested results do not predict future returns. Nothing here is investment advice.
+        </p>
+        <p className="legal-links">
+          <Link href="/terms">Terms of service</Link>
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/risk">Risk disclosure</Link>
         </p>
       </div>
     </footer>

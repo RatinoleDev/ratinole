@@ -209,3 +209,16 @@ model LlmUsage {
 
   @@index([at])
 }
+
+/// Hourly perpetual funding rates, saved so decisions and backtests can be replayed.
+model FundingRate {
+  market    String
+  source    String
+  /// Settlement time, floored to the hour.
+  hour      DateTime
+  /// Fraction per hour (0.0000125 = 0.01% per 8 hours).
+  rate      Float
+  fetchedAt DateTime @default(now())
+
+  @@id([market, source, hour])
+}

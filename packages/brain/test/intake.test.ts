@@ -86,9 +86,14 @@ describe("draftToPlan", () => {
   });
 
   it("refuses signals whose data is not collected, naming the data", () => {
-    const out = draftToPlan(draft({ entry: [{ signal: "wallet_net_flow_usd", op: ">", value: 0, window: null }, { signal: "funding_rate", op: "<", value: 0, window: null }] }), opts);
+    const out = draftToPlan(draft({ entry: [{ signal: "wallet_net_flow_usd", op: ">", value: 0, window: null }, { signal: "liquidations_usd", op: ">", value: 0, window: null }] }), opts);
     expect(out).toMatchObject({ ok: false, code: "unsupported_signal" });
-    expect(!out.ok && out.message).toMatch(/large-wallet flows and funding rates/);
+    expect(!out.ok && out.message).toMatch(/large-wallet flows and liquidation data/);
+  });
+
+  it("accepts funding, which is collected", () => {
+    const out = draftToPlan(draft({ entry: [{ signal: "funding_rate", op: "<", value: 0, window: null }] }), opts);
+    expect(out.ok && out.plan.entry).toEqual([{ signal: "funding_rate", op: "<", value: 0 }]);
   });
 
   it("refuses rebalance and grid plans for now", () => {

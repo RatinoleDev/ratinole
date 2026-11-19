@@ -1,6 +1,6 @@
-# Data sources (Phase 1)
+# Data sources
 
-Phase 1 agents use hourly candles only: price and volume. Every decision stores
+Agents use hourly candles (price and volume) and hourly perpetual funding rates. Every decision stores
 the source it used (`candleSource`, e.g. `binance:ETHUSDT`) and the open time of
 the last closed candle (`candleTime`). Closed candles are saved in the `Candle`
 table, so any decision or backtest can be replayed from stored data.
@@ -10,17 +10,20 @@ table, so any decision or backtest can be replayed from stored data.
 | Binance spot (primary) | ETH, BTC hourly candles | `https://data-api.binance.vision/api/v3/klines` | none | 1000 candles per request; weight-based rate limit. `api.binance.com` refuses some regions (it returned HTTP 451 from the build machine), so the market-data-only host is used. Prices are USDT pairs, standing in for USDG. |
 | Hyperliquid (fallback) | Same markets when Binance fails | `POST https://api.hyperliquid.xyz/info` (`candleSnapshot`) | none | Perpetual-futures prices, close to spot but not identical. Returns at most the 5000 most recent candles. |
 | Postgres `Candle` table (last resort) | When both feeds fail | local | – | Closed candles only. A decision for the current hour then holds with a fresh-data veto. |
+| Hyperliquid funding | ETH, BTC hourly funding rates | `POST https://api.hyperliquid.xyz/info` (`fundingHistory`) | none | Hourly settlements, 500 per request, full history, so backtests can use it. Saved in the `FundingRate` table. Each candle carries the rate settled at its close. If the feed fails, agents carry on with price signals and funding rules do not hold. Funding evidence names its source. |
 
 Redis caches each feed response for 2 minutes, so all agents on one market
 share one request per hourly run.
 
 ## Not collected yet (Phase 2)
 
-Funding rates, open interest, liquidations, large-wallet flows, news sentiment
-and the event calendar. The intake refuses strategies that depend on them and
+Open interest, liquidations, large-wallet flows, news sentiment and the event
+calendar. (Hyperliquid has no open-interest history and Binance's covers only
+30 days, so open interest needs another source before it can be backtested.) The intake refuses strategies that depend on them and
 names the missing data. Filters that need them (news, earnings week, macro
 releases) are kept in the plan, marked "not checked yet" on the confirmation
-screen and in every decision, and backtests are labelled "Price signals only".
+screen and in every decision, and backtests are labelled with what they used
+("Price signals only" or "Price and funding signals").
 Choosing these providers is an open decision (HANDOFF section 9, item 6).
 
 ## Network notes for this repository's cloud sandbox

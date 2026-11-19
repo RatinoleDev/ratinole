@@ -8,7 +8,7 @@
  */
 import { sma, trailingMeanExcl } from "./indicators";
 import type { RegimeReading } from "./regime";
-import { SIGNALS, conditionHolds, formatSignalValue, type SeriesSource, type SignalId, type SignalSpec } from "./signals";
+import { SIGNALS, conditionHolds, formatSignalValue, fundingAverage, type SeriesSource, type SignalId, type SignalSpec } from "./signals";
 import type { Condition, EvidenceItem } from "./types";
 
 export interface ResolvedCondition {
@@ -52,6 +52,7 @@ export function conditionName(rc: ResolvedCondition): string {
   if (id === "from_high_pct") return `Below ${rc.window}-hour high`;
   if (id === "volume_ratio") return `Volume vs ${rc.window}-hour average`;
   if (id === "volatility_pct") return `Volatility (${rc.window} h)`;
+  if (id === "funding_rate") return `Funding (${rc.window}-hour average)`;
   return rc.spec.name;
 }
 
@@ -107,7 +108,7 @@ export function resolveConditions(conds: readonly Condition[], prefix: "entry" |
  * Market context scored for buying: trend, volatility and volume. For a sell
  * decision the caller negates the scores.
  */
-export function contextEvidence(src: SeriesSource, i: number, reg: RegimeReading): EvidenceItem[] {
+export function contextEvidence(src: SeriesSource, i: number, reg: RegimeReading, sources: { funding?: string } = {}): EvidenceItem[] {
   const items: EvidenceItem[] = [];
   const slopeScale = Math.max(0.05, 0.3 * reg.dailyVolPct);
   const trendWord = reg.direction === "up" ? "Rising" : reg.direction === "down" ? "Falling" : "Flat";
@@ -134,6 +135,17 @@ export function contextEvidence(src: SeriesSource, i: number, reg: RegimeReading
       name: "Volume",
       value: `${ratio.toFixed(1)}× normal over 6 h, price ${pct(ret6, 1)}`,
       score: clampScore(100 * Math.tanh(ratio - 1) * sign),
+    });
+  }
+
+  // Funding, read contrarian: crowded longs paying a lot argue against buying,
+  // shorts paying argue for it. About +0.01% per 8 hours is neutral.
+  const fr = src.memoize("ctx:funding8", () => fundingAverage(src.funding, 8))[i];
+  if (fr != null) {
+    items.push({
+      name: "Funding",
+      value: `${formatSignalValue("funding_rate", fr)} per 8 h, 8-hour average${sources.funding ? ` (${sources.funding})` : ""}`,
+      score: tanhScore(-(fr - 0.01) / 0.02),
     });
   }
   return items;

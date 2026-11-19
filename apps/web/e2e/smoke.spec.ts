@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-const ROUTES = ["/", "/app", "/app/studio", "/app/agents", "/app/leaderboard", "/app/vault", "/app/payroll", "/app/settings"];
+const ROUTES = ["/", "/app", "/app/studio", "/app/agents", "/app/leaderboard", "/app/vault", "/app/payroll", "/app/settings", "/terms", "/privacy", "/risk"];
 
 const me = { address: "0x7a3f00000000000000000000000000000000091c2", maxSizePct: 35, dailyLossCapPct: 3, agentCount: 1, maxAgents: 3 };
 
@@ -81,6 +81,24 @@ test("landing shows honest empty states when there is no data", async ({ page })
   // No prototype sample numbers.
   await expect(page.getByText("$2.1M")).toHaveCount(0);
   await expect(page.getByText("Tidewater")).toHaveCount(0);
+});
+
+test("has icons, link previews, robots, sitemap and legal pages", async ({ page, request }) => {
+  await page.goto("/");
+  await expect(page).toHaveTitle(/^Ratinole\./);
+  await expect(page.locator('link[rel="icon"]').first()).toHaveAttribute("href", /icon|favicon/);
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /^https:\/\/ratinole\.trade\/opengraph-image/);
+  await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
+  for (const path of ["/favicon.ico", "/icon.svg", "/apple-icon.png", "/opengraph-image.png", "/manifest.webmanifest"]) {
+    expect((await request.get(path)).status(), path).toBe(200);
+  }
+  const robots = await (await request.get("/robots.txt")).text();
+  expect(robots).toContain("Disallow: /api/");
+  expect(robots).toContain("Sitemap: https://ratinole.trade/sitemap.xml");
+  expect(await (await request.get("/sitemap.xml")).text()).toContain("https://ratinole.trade/privacy");
+  await page.getByRole("link", { name: "Privacy" }).click();
+  await expect(page.getByRole("heading", { name: "Privacy", level: 1 })).toBeVisible();
+  await expect(page.getByText(/Draft, pending legal review/)).toBeVisible();
 });
 
 test("app pages ask a signed-out visitor to connect a wallet", async ({ page }) => {

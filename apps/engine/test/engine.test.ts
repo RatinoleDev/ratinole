@@ -3,6 +3,7 @@ import { prisma, type Prisma } from "@rationale/db";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { FreshDataPendingError, recomputeStats, runAgentHours } from "../src/runAgent";
 import { ensureExample, runBacktest } from "../src/runBacktest";
+import type { FundingFeed } from "../src/market/funding";
 import { tick } from "../src/tick";
 import { fakeFeed, synthCandles } from "./fakes";
 
@@ -27,6 +28,7 @@ async function wipe() {
   await prisma.user.deleteMany();
   await prisma.engineRun.deleteMany();
   await prisma.candle.deleteMany();
+  await prisma.fundingRate.deleteMany();
 }
 
 async function makeAgent(over: Partial<Prisma.AgentUncheckedCreateInput> = {}) {
@@ -206,5 +208,52 @@ describe.skipIf(!hasDb)("runBacktest", () => {
     expect(first.status).toBe("done");
     expect((await ensureExample(deps)).status).toBe("fresh");
     expect(await prisma.backtest.count({ where: { kind: "example" } })).toBe(1);
+  });
+});
+
+describe.skipIf(!hasDb)("funding", () => {
+  beforeEach(wipe);
+  const fundingFeed = (rate: number, fail = false): FundingFeed => ({
+    name: "hyperliquid",
+    label: "Hyperliquid",
+    async fetch(_m, from, to) {
+      if (fail) throw new Error("down");
+      const out = new Map<number, number>();
+      for (let h = Math.ceil(from / HOUR_MS) * HOUR_MS; h < to; h += HOUR_MS) out.set(h, rate);
+      return out;
+    },
+  });
+
+  it("adds funding evidence with its source to each decision and saves the rates", async () => {
+    const agent = await makeAgent({ plan: { ...plan, entry: [{ signal: "funding_rate", op: "<", value: 0 }] } as unknown as Prisma.InputJsonValue });
+    const now = () => H0 + HOUR_MS + 60_000;
+    await runAgentHours(agent.id, H0 + HOUR_MS, { prisma, feeds, funding: fundingFeed(-0.00002), now });
+    const ds = await prisma.decision.findMany({ where: { agentId: agent.id }, orderBy: { hour: "asc" } });
+    expect(ds).toHaveLength(2);
+    const ev = ds[0]!.evidence as { name: string; value: string }[];
+    expect(ev[0]!.name).toBe("Funding (8-hour average)");
+    expect(ev.find((e) => e.name === "Funding")!.value).toMatch(/\(Hyperliquid\)$/);
+    expect(ds[0]!.action).toBe("buy");
+    expect(await prisma.fundingRate.count()).toBeGreaterThan(700);
+  });
+
+  it("keeps running on price signals when funding cannot be fetched", async () => {
+    const agent = await makeAgent();
+    const res = await runAgentHours(agent.id, H0, { prisma, feeds, funding: fundingFeed(0, true), now: () => H0 + 60_000 });
+    expect(res.decided).toBe(1);
+    const d = await prisma.decision.findFirstOrThrow({ where: { agentId: agent.id } });
+    expect((d.evidence as { name: string }[]).some((e) => e.name === "Funding")).toBe(false);
+  });
+
+  it("labels backtests that used funding", async () => {
+    const now = Date.UTC(2026, 10, 18, 0, 30);
+    const long = synthCandles(Date.UTC(2026, 6, 1), Date.UTC(2026, 10, 18, 1), 9);
+    const bt = await prisma.backtest.create({
+      data: { sentence: "s", plan: plan as unknown as Prisma.InputJsonValue, market: "ETH", maxSizePct: 35, dailyLossCapPct: 3, costPct: 0.1, startCash: 10_000 },
+    });
+    await runBacktest(bt.id, { prisma, feeds: [fakeFeed("binance", long)], funding: fundingFeed(0.0000125), now: () => now });
+    const r = await prisma.backtest.findUniqueOrThrow({ where: { id: bt.id } });
+    expect(r.label).toBe("Price and funding signals");
+    expect(r.source).toBe("Binance ETHUSDT hourly, Hyperliquid funding");
   });
 });

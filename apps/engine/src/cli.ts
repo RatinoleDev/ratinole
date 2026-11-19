@@ -6,6 +6,7 @@
  *   pnpm --filter @rationale/engine tick stats        recompute every agent's running stats
  */
 import { prisma } from "@rationale/db";
+import { hyperliquidFunding } from "./market/funding";
 import { redisConnection } from "./redis";
 import { recomputeStats } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
@@ -13,7 +14,7 @@ import { tick } from "./tick";
 
 const [cmd, arg] = process.argv.slice(2);
 const redis = redisConnection();
-const deps = { prisma, redis };
+const deps = { prisma, redis, funding: hyperliquidFunding };
 
 async function main() {
   if (!cmd) console.log(await tick(deps));

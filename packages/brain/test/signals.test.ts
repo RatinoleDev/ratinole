@@ -43,7 +43,18 @@ describe("SeriesSource", () => {
     expect(src.signal("rsi", 14)).toBe(src.signal("rsi", 14));
   });
   it("refuses unavailable signals", () => {
-    expect(() => src.signal("funding_rate")).toThrow();
+    expect(() => src.signal("news_sentiment")).toThrow();
+  });
+
+  it("averages funding over the window in percent per 8 hours, and needs every hour", () => {
+    const base = fromCloses(Array.from({ length: 30 }, () => 100));
+    const withF = base.map((c, i) => ({ ...c, f: i === 3 ? undefined : 0.0000125 }));
+    const fs = new SeriesSource(withF);
+    expect(fs.signal("funding_rate", 8)[29]).toBeCloseTo(0.01, 12);
+    expect(fs.signal("funding_rate", 8)[10]).toBeNull(); // hour 3 missing is inside the window
+    expect(fs.signal("funding_rate", 8)[11]).toBeCloseTo(0.01, 12);
+    expect(new SeriesSource(base).signal("funding_rate", 8)[29]).toBeNull();
+    expect(formatSignalValue("funding_rate", -0.0042)).toBe("−0.0042%");
   });
 });
 

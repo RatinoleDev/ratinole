@@ -77,6 +77,14 @@ export function describeCondition(c: Condition, tunedWindow?: number): string {
       return `Volume ${opWords(c.op)} ${fmt(v)}× its ${w ?? 24}-hour average`;
     case "volatility_pct":
       return `Typical daily move ${opWords(c.op)} ${fmt(v)}%`;
+    case "funding_rate": {
+      const avg = w != null && w !== 8 ? ` (${w}-hour average)` : "";
+      if (v === 0 && c.op === "<") return `Funding is negative${avg}`;
+      if (v === 0 && c.op === ">") return `Funding is positive${avg}`;
+      if (v === 0 && c.op === "crosses_below") return `Funding turns negative${avg}`;
+      if (v === 0 && c.op === "crosses_above") return `Funding turns positive${avg}`;
+      return `Funding${avg} ${opWords(c.op)} ${signed(v)}% per 8 hours`;
+    }
     default: {
       const spec = SIGNALS[id];
       return `${spec.name} ${opWords(c.op)} ${fmt(v)}`;

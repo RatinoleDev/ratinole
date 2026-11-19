@@ -19,12 +19,15 @@ import type { Redis } from "ioredis";
 import { env } from "./env";
 import { log } from "./log";
 import { loadCandles } from "./market/candles";
+import { attachFunding, loadFunding, type FundingFeed } from "./market/funding";
 import type { CandleFeed } from "./market/types";
 
 export interface EngineDeps {
   prisma: PrismaClient;
   redis?: Redis;
   feeds?: CandleFeed[];
+  /** Funding source; omit to run on price signals only. */
+  funding?: FundingFeed | null;
   now?: () => number;
 }
 
@@ -98,7 +101,9 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
   const params = agent.params as unknown as AgentParams;
   const warmup = requiredWarmup(plan) + 24;
   const set = await loadCandles(agent.market, start - warmup * HOUR_MS, upToHour + HOUR_MS, deps);
-  const byTime = new Map<number, Candle>(set.candles.map((c) => [c.t, c]));
+  const funding = deps.funding ? await loadFunding(deps.funding, agent.market, start - warmup * HOUR_MS, upToHour + 2 * HOUR_MS, deps) : new Map<number, number>();
+  const candles = attachFunding(set.candles, funding);
+  const byTime = new Map<number, Candle>(candles.map((c) => [c.t, c]));
 
   const ctx = {
     agentId,
@@ -107,6 +112,7 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
     limits: { maxSizePct: agent.maxSizePct, dailyLossCapPct: agent.dailyLossCapPct },
     costPct: PAPER.costPct,
     market: agent.market,
+    sources: funding.size && deps.funding ? { funding: deps.funding.label } : undefined,
   };
   let state: PositionState = agent.state ? toState(agent.state) : initialState(agent.startingCash, start);
   let holdEntry = agent.holdEntryPrice;
@@ -130,10 +136,10 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
       throw new FreshDataPendingError(`Candle for ${new Date(h).toISOString()} not available yet (${agent.market})`);
     }
 
-    const out = decide(ctx, { candles: set.candles, hour: h, state, fillPrice });
+    const out = decide(ctx, { candles, hour: h, state, fillPrice });
     if (holdEntry == null) holdEntry = fillPrice ?? out.markPrice;
     const holdingEquity = agent.startingCash * (1 - PAPER.costPct / 100) * (out.markPrice / holdEntry);
-    const closedBefore = set.candles.filter((c) => c.t + HOUR_MS <= h);
+    const closedBefore = candles.filter((c) => c.t + HOUR_MS <= h);
     const candleTime = closedBefore[closedBefore.length - 1]!.t;
     const isLate = now - h > LATE_AFTER_MS;
     const d = out.decision;

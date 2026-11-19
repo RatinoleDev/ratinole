@@ -1,27 +1,65 @@
 #!/usr/bin/env bash
-# Exit 0 when /api/health says ok, 1 when it reports a problem (engine heartbeat
-# stale or missed hours), 2 when it cannot be reached. Prints the reason.
-# Run every few minutes from cron; cron mails any output if MAILTO is set.
-# Set ALERT_WEBHOOK_URL to also POST {"text": "..."} to a webhook of your choice.
+# Checks /api/health. Exit 0 = ok, 1 = problem reported (engine heartbeat stale
+# or missed hours), 2 = cannot reach it. Run every few minutes from cron.
+#
+# Alerts are sent only when the state changes (problem starts, problem clears),
+# so a long outage does not send a message every run. Channels, all optional:
+#   TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID   message to a Telegram chat
+#   ALERT_WEBHOOK_URL                       POST {"text": "..."} to any webhook
+# They can be set in the environment or in the app's .env (ENV_FILE).
 set -uo pipefail
 
 URL="${HEALTH_URL:-http://127.0.0.1:4000/api/health}"
+ENV_FILE="${ENV_FILE:-$(dirname "$0")/../.env}"
+STATE_FILE="${HEALTH_STATE_FILE:-$HOME/.ratinole-health-state}"
 
-alert() {
-  echo "$1"
-  if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
+from_env_file() {
+  [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true
+}
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(from_env_file TELEGRAM_BOT_TOKEN)}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-$(from_env_file TELEGRAM_CHAT_ID)}"
+ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(from_env_file ALERT_WEBHOOK_URL)}"
+
+json_string() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+}
+
+send() {
+  local text="$1"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $text"
+  if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
     curl -fsS --max-time 10 -H 'content-type: application/json' \
-      --data "$(printf '{"text":%s}' "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" \
-      "$ALERT_WEBHOOK_URL" >/dev/null || echo "alert webhook failed"
+      --data "{\"chat_id\":$(printf '%s' "$TELEGRAM_CHAT_ID" | json_string),\"text\":$(printf '%s' "$text" | json_string)}" \
+      "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null || echo "telegram alert failed"
+  fi
+  if [ -n "$ALERT_WEBHOOK_URL" ]; then
+    curl -fsS --max-time 10 -H 'content-type: application/json' \
+      --data "{\"text\":$(printf '%s' "$text" | json_string)}" "$ALERT_WEBHOOK_URL" >/dev/null || echo "webhook alert failed"
   fi
 }
 
+previous="$(cat "$STATE_FILE" 2>/dev/null || echo ok)"
+
 if ! body="$(curl -fsS --max-time 10 "$URL")"; then
-  alert "Rationale health: cannot reach $URL"
-  exit 2
+  state="down"
+  detail="cannot reach $URL"
+  code=2
+elif printf '%s' "$body" | grep -q '"ok":true'; then
+  state="ok"
+  detail=""
+  code=0
+else
+  state="problem"
+  detail="$body"
+  code=1
 fi
-if printf '%s' "$body" | grep -q '"ok":true'; then
-  exit 0
+
+if [ "$state" != "$previous" ]; then
+  if [ "$state" = "ok" ]; then
+    send "Ratinole health: back to normal."
+  else
+    send "Ratinole health: ${state}. ${detail}"
+  fi
+  printf '%s' "$state" > "$STATE_FILE"
 fi
-alert "Rationale health: problem reported: $body"
-exit 1
+exit "$code"

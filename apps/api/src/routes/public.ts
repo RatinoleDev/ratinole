@@ -69,7 +69,10 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
   });
 
   app.get("/health", async (): Promise<HealthDTO> => {
-    const [heartbeat, lastTick] = await Promise.all([deps.redis.get("engine:heartbeat"), deps.redis.get("engine:lastTick")]);
+    // If Redis is down, report "not ok" rather than failing the request.
+    const [heartbeat, lastTick] = await Promise.all([deps.redis.get("engine:heartbeat"), deps.redis.get("engine:lastTick")]).catch(
+      () => [null, null] as const,
+    );
     const lastDue = new Date(Math.floor((now() - GRACE_MS) / HOUR_MS) * HOUR_MS);
     const agents = await deps.prisma.agent.findMany({ where: { status: "active" }, select: { id: true, owedFrom: true } });
     let missedHours = 0;

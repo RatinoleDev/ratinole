@@ -41,6 +41,8 @@ export interface DecideContext {
   costPct: number;
   /** Market name used in explanations; defaults to the plan's first market. */
   market?: string;
+  /** Where non-candle evidence came from, shown next to it (e.g. { funding: "Hyperliquid" }). */
+  sources?: { funding?: string };
   regimeParams?: RegimeParams;
 }
 
@@ -141,7 +143,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
   const regime = reading?.regime ?? "ranging";
   const fresh = freshness(candle, hour, fillPrice, reading != null);
   const notChecked = plan.filters.map((f) => NOT_CHECKED_SHORT[f]).filter((x): x is string => !!x);
-  const ctxBuy = reading ? contextEvidence(src, i, reading) : [];
+  const ctxBuy = reading ? contextEvidence(src, i, reading, ctx.sources) : [];
 
   const entry = resolveConditions(plan.entry, "entry", ctx.params.windows).map((rc) => readCondition(src, i, rc));
   const exitConds = resolveConditions(plan.exit.conditions ?? [], "exit", ctx.params.windows).map((rc) => readCondition(src, i, rc));

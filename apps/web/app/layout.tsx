@@ -1,4 +1,4 @@
-import { BRAND_NAME, BRAND_TAGLINE } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE } from "@rationale/config";
 import type { Metadata, Viewport } from "next";
 import { Bricolage_Grotesque, Instrument_Sans } from "next/font/google";
 import type { ReactNode } from "react";
@@ -17,9 +17,18 @@ const body = Instrument_Sans({
   display: "swap",
 });
 
+const title = `${BRAND_NAME}. Trading agents that show their reasoning`;
+const description =
+  "Describe a trading strategy in a sentence. Your agent reads the market every hour and writes down why it acted or waited. Paper trading is open.";
+
 export const metadata: Metadata = {
-  title: `${BRAND_NAME}. Trading agents that show their reasoning`,
-  description: BRAND_TAGLINE,
+  metadataBase: new URL(`https://${BRAND_DOMAIN}`),
+  title,
+  description,
+  applicationName: BRAND_NAME,
+  alternates: { canonical: "/" },
+  openGraph: { type: "website", url: "/", siteName: BRAND_NAME, title, description: BRAND_TAGLINE, locale: "en_US" },
+  twitter: { card: "summary_large_image", title, description: BRAND_TAGLINE },
 };
 
 export const viewport: Viewport = {

@@ -5,10 +5,12 @@
  */
 export const MIN_FILLS_TO_JUDGE = 10;
 
-export function backtestWarnings(r: { tunedTrades: number; unseenTrades: number }): string[] {
+export function backtestWarnings(r: { tunedTrades: number; unseenTrades: number; tunedReturnPct?: number }): string[] {
   const out: string[] = [];
   if (r.tunedTrades === 0) {
-    out.push("No trades on the tuning days: every setting that traded did worse than standing aside, so the tuner chose the strictest one.");
+    out.push("No trades on the tuning days: the entry rules never held, so there was nothing to tune.");
+  } else if (r.tunedReturnPct != null && r.tunedReturnPct < 0) {
+    out.push("It lost money on the tuning days even with the best settings the tuner found.");
   }
   if (r.unseenTrades === 0) {
     out.push("No trades on the unseen days, so there is nothing to judge yet.");

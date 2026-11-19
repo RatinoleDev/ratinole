@@ -47,6 +47,8 @@ export interface SignalSpec {
   scale: number;
   /** Allowed range for a condition value. */
   range: [number, number];
+  /** Decimal places when showing a value (default by magnitude). */
+  digits?: number;
   compute?: (s: SeriesSource, window: number) => Series;
 }
 
@@ -54,10 +56,13 @@ export interface SignalSpec {
 export class SeriesSource {
   readonly closes: number[];
   readonly volumes: number[];
+  /** Funding per hour (fraction) settled at each candle's close; null when unknown. */
+  readonly funding: (number | null)[];
   private memo = new Map<string, Series>();
   constructor(readonly candles: readonly Candle[]) {
     this.closes = candles.map((c) => c.c);
     this.volumes = candles.map((c) => c.v);
+    this.funding = candles.map((c) => (c.f == null || !Number.isFinite(c.f) ? null : c.f));
   }
   memoize(key: string, make: () => Series): Series {
     let s = this.memo.get(key);
@@ -190,13 +195,17 @@ export const SIGNALS: Record<SignalId, SignalSpec> = {
   },
   funding_rate: {
     id: "funding_rate",
-    name: "Funding rate",
-    meaning: "Perpetual futures funding rate.",
+    name: "Funding",
+    meaning:
+      "Perpetual futures funding rate in percent per 8 hours, averaged over the last `window` hours (Hyperliquid). Negative means shorts pay longs ('negative funding'); about +0.01 is normal.",
     unit: "%",
-    available: false,
-    needs: "funding rates",
+    available: true,
+    defaultWindow: 8,
+    windowChoices: [8, 24],
     scale: 0.01,
-    range: [-10, 10],
+    range: [-1, 1],
+    digits: 4,
+    compute: (s, w) => fundingAverage(s.funding, w),
   },
   open_interest_change_pct: {
     id: "open_interest_change_pct",
@@ -242,6 +251,25 @@ export const SIGNALS: Record<SignalId, SignalSpec> = {
 
 export const SIGNAL_IDS = Object.keys(SIGNALS) as SignalId[];
 
+/** Mean funding over the last `w` hours, in percent per 8 hours; null if any hour is missing. */
+export function fundingAverage(funding: readonly (number | null)[], w: number): Series {
+  const out: Series = new Array<number | null>(funding.length).fill(null);
+  let sum = 0;
+  let missing = 0;
+  for (let i = 0; i < funding.length; i++) {
+    const v = funding[i];
+    if (v == null) missing++;
+    else sum += v;
+    if (i >= w) {
+      const old = funding[i - w];
+      if (old == null) missing--;
+      else sum -= old;
+    }
+    if (i >= w - 1 && missing === 0) out[i] = (sum / w) * 8 * 100;
+  }
+  return out;
+}
+
 export function isSignalId(v: string): v is SignalId {
   return v in SIGNALS;
 }
@@ -269,7 +297,7 @@ export function conditionHolds(op: Op, value: number, current: number, previous:
 export function formatSignalValue(id: SignalId, v: number): string {
   const spec = SIGNALS[id];
   const abs = Math.abs(v);
-  const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+  const digits = spec.digits ?? (abs >= 100 ? 0 : abs >= 10 ? 1 : 2);
   const n = v.toFixed(digits).replace(/^-/, "−");
   if (spec.unit === "%") return `${v > 0 ? "+" : ""}${n}%`;
   if (spec.unit === "x") return `${n}×`;

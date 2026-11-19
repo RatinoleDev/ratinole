@@ -67,7 +67,7 @@ export interface BacktestDTO {
   marketLabel: string;
   /** e.g. "Binance ETHUSDT hourly" */
   source: string;
-  /** Always "Price signals only" in Phase 1. */
+  /** What the backtest could use, e.g. "Price and funding signals". */
   label: string;
   createdAt: string;
   result?: {

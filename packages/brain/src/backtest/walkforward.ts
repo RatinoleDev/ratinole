@@ -144,13 +144,16 @@ export function walkForward(w: WalkForwardInput): WalkForwardResult {
   const run = (params: AgentParams, start: number, end: number) =>
     simulate({ ctx: ctxFor(params), src, start, end, startCash: w.startCash });
 
+  // Pick the best-scoring setting among those that actually traded. A setting
+  // that never trades would "win" whenever trading lost money, and leave the
+  // unseen days with nothing to test; it is chosen only if nothing traded.
   const tuneOn = (start: number, end: number) => {
-    let best: { params: AgentParams; sim: SimResult } | null = null;
-    for (const params of grid) {
-      const sim = run(params, start, end);
-      if (!best || score(sim) > score(best.sim)) best = { params, sim };
-    }
-    return best!;
+    const results = grid.map((params) => ({ params, sim: run(params, start, end) }));
+    const trading = results.filter((r) => r.sim.trades.length > 0);
+    const pool = trading.length ? trading : results;
+    let best = pool[0]!;
+    for (const r of pool) if (score(r.sim) > score(best.sim)) best = r;
+    return best;
   };
 
   const testLen = last + 1 - split;

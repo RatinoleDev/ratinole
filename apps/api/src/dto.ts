@@ -66,7 +66,7 @@ export function backtestDTO(b: Backtest): BacktestDTO {
       tunedTrades: b.tunedTrades ?? 0,
       unseenTrades: b.unseenTrades ?? 0,
       paramsText: paramsText(plan, params),
-      warnings: backtestWarnings({ tunedTrades: b.tunedTrades ?? 0, unseenTrades: b.unseenTrades ?? 0 }),
+      warnings: backtestWarnings({ tunedTrades: b.tunedTrades ?? 0, unseenTrades: b.unseenTrades ?? 0, tunedReturnPct: b.tunedReturnPct ?? undefined }),
       curve: (b.curve ?? []) as unknown as CurvePointDTO[],
     };
   }

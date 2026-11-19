@@ -103,8 +103,11 @@ path and reloads Nginx after each renewal.
 
 ## 6. Backups and health checks
 
-Add to the deploy user's crontab (`crontab -e`). Set `MAILTO` to get cron
-output by email, and `ALERT_WEBHOOK_URL` to post alerts to a chat webhook.
+Add to the deploy user's crontab (`crontab -e`). For alerts, put
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` (create a bot with
+@BotFather, send it a message, then read your chat id from
+`https://api.telegram.org/bot<token>/getUpdates`), or set `ALERT_WEBHOOK_URL`.
+An alert is sent when health turns bad and again when it recovers.
 
 ```
 MAILTO=you@example.com

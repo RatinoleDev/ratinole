@@ -8,6 +8,7 @@ import { BACKTEST, EXAMPLE_STRATEGY, PAPER, RISK_DEFAULTS } from "@rationale/con
 import type { Prisma } from "@rationale/db";
 import { log } from "./log";
 import { loadCandles } from "./market/candles";
+import { attachFunding, loadFunding } from "./market/funding";
 import { hourFloor, type EngineDeps } from "./runAgent";
 
 export async function runBacktest(backtestId: string, deps: EngineDeps): Promise<{ status: string }> {
@@ -25,7 +26,9 @@ export async function runBacktest(backtestId: string, deps: EngineDeps): Promise
     const days = BACKTEST.days;
     const want = warmup + days * 24 + 2;
     const set = await loadCandles(bt.market, endHour - want * HOUR_MS, endHour, deps);
-    const candles = set.candles.filter((c) => c.t + HOUR_MS <= now);
+    const funding = deps.funding ? await loadFunding(deps.funding, bt.market, endHour - want * HOUR_MS, endHour + HOUR_MS, deps) : new Map<number, number>();
+    const candles = attachFunding(set.candles, funding).filter((c) => c.t + HOUR_MS <= now);
+    const fundingHours = candles.filter((c) => c.f != null).length;
     const evalStart = Math.max(warmup, candles.length - 1 - days * 24);
     const res = walkForward({
       plan,
@@ -41,7 +44,8 @@ export async function runBacktest(backtestId: string, deps: EngineDeps): Promise
       where: { id: bt.id },
       data: {
         status: "done",
-        source: `${set.source === "binance" ? "Binance" : "Hyperliquid"} ${set.sourceLabel.split(":")[1]} hourly${set.fromCache ? " (cached)" : ""}`,
+        source: `${set.source === "binance" ? "Binance" : "Hyperliquid"} ${set.sourceLabel.split(":")[1]} hourly${set.fromCache ? " (cached)" : ""}${fundingHours ? `, ${deps.funding!.label} funding` : ""}`,
+        label: fundingHours ? "Price and funding signals" : "Price signals only",
         params: res.params as unknown as Prisma.InputJsonValue,
         fromTime: new Date(res.tune.from),
         splitTime: new Date(res.splitHour),
@@ -63,6 +67,8 @@ export async function runBacktest(backtestId: string, deps: EngineDeps): Promise
           folds: res.folds,
           paramsText: paramsText(plan, res.params),
           candleSource: set.sourceLabel,
+          fundingSource: fundingHours ? deps.funding?.label : null,
+          fundingHours,
           firstCandle: new Date(candles[0]!.t).toISOString(),
           lastCandle: new Date(candles[candles.length - 1]!.t).toISOString(),
         } as unknown as Prisma.InputJsonValue,

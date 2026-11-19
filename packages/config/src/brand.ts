@@ -3,6 +3,8 @@
  * ratinole.trade; the display name (Rationale or Ratinole) is still to be
  * confirmed (HANDOFF section 9). Change it here only.
  */
-export const BRAND_NAME = "Rationale";
+export const BRAND_NAME = "Ratinole";
 export const BRAND_DOMAIN = "ratinole.trade";
 export const BRAND_TAGLINE = "Trading agents that show their reasoning, on Robinhood Chain.";
+/** Shown on the legal pages. Empty until the owner chooses a public contact address. */
+export const CONTACT_EMAIL = "";

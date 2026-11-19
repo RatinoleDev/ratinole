@@ -115,10 +115,12 @@ pnpm typecheck
 pnpm lint
 ```
 
-Browser smoke tests for the web app (build it first; the API is mocked):
+Browser smoke tests for the web app. Build it pointed at a closed port, so the
+landing page is rendered with its empty states, then run the tests (browser API
+calls are mocked):
 
 ```bash
-pnpm --filter @rationale/web build
+API_INTERNAL_URL=http://127.0.0.1:9 pnpm --filter @rationale/web build
 ```
 
 ```bash
@@ -129,7 +131,7 @@ GitHub Actions runs all of the above on every push (`.github/workflows/ci.yml`).
 
 ## Checking the strategy reader
 
-`apps/api/eval/cases.json` holds 28 realistic sentences (English and Indonesian,
+`apps/api/eval/cases.json` holds 29 realistic sentences (English and Indonesian,
 plus prompt-injection attempts) with the plan each should produce. With
 `ANTHROPIC_API_KEY` set, a dry run prints the worst-case cost; `--yes` spends it:
 
@@ -145,9 +147,9 @@ pnpm --filter @rationale/api eval:intake --yes
 
 Each hour, for each active paper agent (HANDOFF 5.2, steps 1 to 4):
 
-1. **Sense**: hourly candles from Binance (Hyperliquid if Binance fails). See [docs/data-sources.md](docs/data-sources.md).
+1. **Sense**: hourly candles from Binance (Hyperliquid if Binance fails) and hourly funding rates from Hyperliquid. See [docs/data-sources.md](docs/data-sources.md).
 2. **Regime**: trending, ranging or stressed from the 200-hour trend slope and realised volatility (`packages/brain/src/regime.ts`).
-3. **Weigh**: each entry or exit rule and three context signals (trend, volatility, volume) scored from -100 to +100, combined into a confidence from 0 to 100 (`evidence.ts`).
+3. **Weigh**: each entry or exit rule and context signals (trend, volatility, volume, funding) scored from -100 to +100, combined into a confidence from 0 to 100 (`evidence.ts`).
 4. **Guard**: fresh data, position size, daily loss cap, market stress (if the plan asks), pool depth. A veto always wins; limits on new risk never block an exit (`guard.ts`).
 
 The result is one `Decision` row per agent per hour, with evidence, guard checks and

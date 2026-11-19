@@ -64,7 +64,11 @@ export type Decision = {
   txHash?: string;
 };
 
-/** One hourly candle. `t` is the open time in ms since epoch (UTC). */
-export type Candle = { t: number; o: number; h: number; l: number; c: number; v: number };
+/**
+ * One hourly candle. `t` is the open time in ms since epoch (UTC).
+ * `f`, when known, is the perpetual funding rate settled at this candle's close,
+ * as a fraction per hour (Hyperliquid convention; 0.0000125 = 0.01% per 8 hours).
+ */
+export type Candle = { t: number; o: number; h: number; l: number; c: number; v: number; f?: number };
 
 export const HOUR_MS = 3_600_000;

@@ -557,3 +557,17 @@ a.btn{text-decoration:none;display:inline-block;text-align:center}
 .lb tr.unranked td{color:var(--ink3)}
 .lb tr.unranked td b{color:var(--ink2)}
 .lb .sep td{font-size:13px;color:var(--ink3);background:var(--fog);font-weight:600}
+
+/* legal pages */
+.legalpage{padding:56px 0 96px}
+.legalpage .wrap{max-width:780px}
+.legalpage h1{font-family:var(--display);font-size:clamp(40px,6vw,64px);font-weight:800;letter-spacing:-.04em;line-height:1}
+.legalpage .lede{font-size:20px;color:var(--ink2);margin:18px 0 26px}
+.legalpage h2{font-family:var(--display);font-size:24px;letter-spacing:-.02em;margin:34px 0 10px}
+.legalpage p,.legalpage li{color:var(--ink2);font-size:17px;line-height:1.6}
+.legalpage ul{padding-left:20px;display:grid;gap:6px;margin:0}
+.legalpage a{text-decoration:underline;text-underline-offset:3px}
+.draftnote{display:inline-block;font-size:13.5px;font-weight:600;color:var(--ink2);background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 14px;margin-bottom:22px}
+.legal-links{display:flex;gap:20px;flex-wrap:wrap;margin-top:12px;font-size:13.5px}
+.legal-links a{color:var(--ink2);text-decoration:none}
+.legal-links a:hover{color:var(--ink);text-decoration:underline}

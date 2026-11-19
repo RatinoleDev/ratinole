@@ -220,3 +220,37 @@ describe("decide: reproducibility", () => {
     expect(d.confidence).toBeLessThanOrEqual(100);
   });
 });
+
+describe("decide: funding", () => {
+  const withFunding = (candles: Candle[], rate: number) => candles.map((c) => ({ ...c, f: rate }));
+
+  it("buys on negative funding and shows funding as evidence with its source", () => {
+    const candles = withFunding(series(rising(3, 0.001)), -0.00002);
+    const { hour, fillPrice } = at(candles);
+    const plan: Partial<Plan> = { entry: [{ signal: "funding_rate", op: "<", value: 0 }] };
+    const out = decide({ ...ctx(plan, 0), sources: { funding: "Hyperliquid" } }, { candles, hour, state: initialState(10_000, hour), fillPrice });
+    expect(out.decision.action).toBe("buy");
+    expect(out.decision.explanation).toMatch(/^Buy\. Funding is negative \(now −0\.0160%\)/);
+    const f = out.decision.evidence.find((e) => e.name === "Funding")!;
+    expect(f.value).toBe("−0.0160% per 8 h, 8-hour average (Hyperliquid)");
+    expect(f.score).toBeGreaterThan(80);
+  });
+
+  it("reads high positive funding as evidence against buying, and leaves it out when unknown", () => {
+    const hot = withFunding(series(rising(3, 0.001)), 0.0001);
+    const { hour, fillPrice } = at(hot);
+    const out = decide(ctx(), { candles: hot, hour, state: initialState(10_000, hour), fillPrice });
+    expect(out.decision.evidence.find((e) => e.name === "Funding")!.score).toBeLessThan(-90);
+    const none = series(rising(3, 0.001));
+    expect(decide(ctx(), { candles: none, hour, state: initialState(10_000, hour), fillPrice }).decision.evidence.some((e) => e.name === "Funding")).toBe(false);
+  });
+
+  it("does not trade on a funding rule when funding data is missing", () => {
+    const candles = series(rising(3, 0.001));
+    const { hour, fillPrice } = at(candles);
+    const plan: Partial<Plan> = { entry: [{ signal: "funding_rate", op: "<", value: 0 }] };
+    const out = decide(ctx(plan, 0), { candles, hour, state: initialState(10_000, hour), fillPrice });
+    expect(out.decision.action).toBe("hold");
+    expect(out.decision.evidence[0]!.value).toMatch(/not enough history/);
+  });
+});

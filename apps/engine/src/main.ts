@@ -7,6 +7,7 @@ import { prisma } from "@rationale/db";
 import { Queue, Worker, type Job } from "bullmq";
 import { env } from "./env";
 import { log } from "./log";
+import { hyperliquidFunding } from "./market/funding";
 import { redisConnection } from "./redis";
 import { FreshDataPendingError, hourFloor } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
@@ -14,7 +15,7 @@ import { runAgentAndRecord, tick } from "./tick";
 
 const redis = redisConnection();
 const queue = new Queue(ENGINE_QUEUE, { connection: redisConnection() });
-const deps = { prisma, redis };
+const deps = { prisma, redis, funding: hyperliquidFunding };
 
 async function handle(job: Job): Promise<unknown> {
   switch (job.name) {

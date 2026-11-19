@@ -339,3 +339,16 @@ describe.skipIf(!hasDb)("api", () => {
     });
   });
 });
+
+describe.skipIf(!hasDb)("health without redis", () => {
+  it("reports not ok instead of failing when redis is unreachable", async () => {
+    const { Redis } = await import("ioredis");
+    const dead = new Redis("redis://127.0.0.1:9", { maxRetriesPerRequest: 0, lazyConnect: true, retryStrategy: () => null });
+    dead.on("error", () => undefined);
+    const app = await makeApp({ redis: dead }).app;
+    const res = await app.inject({ method: "GET", url: "/api/health" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: false, engine: { lastHeartbeat: null, lastTick: null } });
+    dead.disconnect();
+  });
+});

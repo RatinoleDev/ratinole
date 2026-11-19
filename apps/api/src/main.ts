@@ -7,7 +7,13 @@ import { anthropicDrafter } from "./llm/anthropic";
 import { buildServer } from "./server";
 
 const env = readEnv();
-const redis = new Redis(env.redisUrl);
+const redis = new Redis(env.redisUrl, { maxRetriesPerRequest: 2 });
+let redisDown = false;
+redis.on("error", (err) => {
+  if (!redisDown) console.error(JSON.stringify({ t: new Date().toISOString(), level: "error", msg: "redis unavailable", error: String(err) }));
+  redisDown = true;
+});
+redis.on("ready", () => (redisDown = false));
 const queue = new Queue(ENGINE_QUEUE, { connection: new Redis(env.redisUrl, { maxRetriesPerRequest: null }) });
 
 const app = await buildServer({

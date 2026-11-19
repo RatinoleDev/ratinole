@@ -117,6 +117,14 @@ describe("walkForward", () => {
     expect(res.unseen.hours).toBe(720);
   });
 
+  it("prefers settings that trade over standing aside, even when trading lost", () => {
+    // Steady decline: buying any dip loses, so a no-trade setting would score best.
+    const candles = walk(2400, { seed: 21, vol: 0.004, drift: -0.0004 });
+    const dip: Plan = { ...plan, entry: [{ signal: "rsi", op: "<", value: 45 }] };
+    const res = walkForward({ plan: dip, candles, evalStart: requiredWarmup(dip), startCash: 10_000, costPct: 0.1, limits });
+    expect(res.tune.trades).toBeGreaterThan(0);
+  });
+
   it("explains what the tuner chose", () => {
     const lines = paramsText(plan, { confidenceThreshold: 60, windows: { "entry.1": 200 } });
     expect(lines).toEqual([
@@ -134,7 +142,8 @@ describe("backtestWarnings", () => {
     expect(few).toHaveLength(1);
     expect(few[0]).toMatch(/^Only 4 buys and sells on the unseen days: too few to tell skill from luck/);
     const none = backtestWarnings({ tunedTrades: 0, unseenTrades: 0 });
-    expect(none[0]).toMatch(/tuner chose the strictest one/);
+    expect(none[0]).toMatch(/entry rules never held/);
     expect(none[1]).toMatch(/nothing to judge yet/);
+    expect(backtestWarnings({ tunedTrades: 12, unseenTrades: 12, tunedReturnPct: -1.2 })[0]).toMatch(/lost money on the tuning days/);
   });
 });
