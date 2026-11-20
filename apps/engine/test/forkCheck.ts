@@ -49,8 +49,11 @@ async function main() {
   };
   const nonce = async () => Number(await rpc<string>("eth_getTransactionCount", [chain.operator, "latest"]));
   const reasonOf = (o: SwapOutcome) => (o.ok ? "UNEXPECTEDLY OK" : o.reason);
-  const buy = (token: Address, feeTier: number, usd: number, onSigned: (h: Hex) => Promise<void> = async () => undefined) =>
-    chain.swap({ vault, tokenIn: LIVE_STABLE.address, tokenOut: token, feeTier, amountIn: toUnits(usd, 6) }, onSigned);
+  // The fork's clock is today's, and the candles the runner uses below are from hours that are already over. So
+  // the check gives every order a deadline by the fork's own clock instead of by its hour.
+  const later = (await chain.chainTime()) + 3600;
+  const buy = (token: Address, feeTier: number, usd: number, onSigned: (h: Hex) => Promise<void> = async () => undefined, deadline = later) =>
+    chain.swap({ vault, tokenIn: LIVE_STABLE.address, tokenOut: token, feeTier, amountIn: toUnits(usd, 6), deadline }, onSigned);
 
   console.log("\nChain client");
   check("the engine's key is the vault's operator", chain.operator === cfg.operator.toLowerCase());
@@ -71,7 +74,7 @@ async function main() {
   const s2 = await chain.snapshot(vault, WETH);
   check("an order withdrawn after signing is never sent", withdrawn === "order withdrawn" && s2.stable === s1.stable && (await nonce()) === n0);
 
-  const sell = await chain.swap({ vault, tokenIn: WETH.address, tokenOut: LIVE_STABLE.address, feeTier: s0.feeTier, amountIn: s2.token }, async () => undefined);
+  const sell = await chain.swap({ vault, tokenIn: WETH.address, tokenOut: LIVE_STABLE.address, feeTier: s0.feeTier, amountIn: s2.token, deadline: later }, async () => undefined);
   const s3 = await chain.snapshot(vault, WETH);
   check("selling the whole WETH balance leaves none", sell.ok && s3.token === 0n, sell.ok ? `$${fromUnits(sell.amountOut, 6)} back` : sell.reason);
 
@@ -82,7 +85,7 @@ async function main() {
   const c1 = await chain.snapshot(vault, BTC);
   const btcPrice = cb.ok ? fromUnits(cb.amountIn, 6) / fromUnits(cb.amountOut, BTC.decimals) : 0;
   check("a cbBTC buy goes through, at a believable price", cb.ok && btcPrice > 10_000 && btcPrice < 1_000_000, cb.ok ? `${fromUnits(cb.amountOut, 8)} cbBTC, $${btcPrice.toFixed(0)} each` : cb.reason);
-  const cs = await chain.swap({ vault, tokenIn: BTC.address, tokenOut: LIVE_STABLE.address, feeTier: c0.feeTier, amountIn: c1.token }, async () => undefined);
+  const cs = await chain.swap({ vault, tokenIn: BTC.address, tokenOut: LIVE_STABLE.address, feeTier: c0.feeTier, amountIn: c1.token, deadline: later }, async () => undefined);
   check("selling the whole cbBTC balance leaves none", cs.ok && (await chain.snapshot(vault, BTC)).token === 0n, cs.ok ? `$${fromUnits(cs.amountOut, 6)} back` : cs.reason);
 
   console.log("\nRefusals are caught before anything is signed, in plain words");
@@ -101,6 +104,9 @@ async function main() {
   // More than the balance, but inside the daily limit, so it is the balance that stops it.
   check("more than the vault holds", reasonOf(await buy(WETH.address, 100, 1000)) === "the vault holds less than the order needed");
   check("the wrong pool", reasonOf(await buy(WETH.address, 3000, 5)) === "the vault no longer allows this market");
+  const clock = await chain.chainTime();
+  check("the chain's clock is read, and is close to this machine's", Math.abs(clock - Date.now() / 1000) < 900, `${Math.round(clock - Date.now() / 1000)} s apart`);
+  check("an order past its deadline", reasonOf(await buy(WETH.address, 100, 5, async () => undefined, clock - 5)) === "the order was placed too late in the hour");
   check("none of the refused orders cost a transaction", (await nonce()) === before);
 
   console.log("\nThe live runner, with the real chain and real candles");
@@ -122,7 +128,7 @@ async function main() {
       owedFrom: new Date(h), state: { create: { cash: cash0, qty: 0, dayStart: new Date(Math.floor(h / (24 * HOUR_MS)) * 24 * HOUR_MS), dayStartEquity: cash0 } },
     },
   });
-  const run = (hour: number) => runLiveAgentHour(agent.id, hour, { prisma, chain, now: () => hour + 60_000 });
+  const run = (hour: number) => runLiveAgentHour(agent.id, hour, { prisma, chain, now: () => hour + 60_000, orderDeadline: () => later });
   const decisions = () => prisma.decision.findMany({ where: { agentId: agent.id }, orderBy: { hour: "asc" } });
 
   await run(h);

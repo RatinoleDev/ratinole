@@ -43,6 +43,11 @@ describe("parseAmount", () => {
     expect(why("")).toBeNull();
     expect(why("   ")).toBeNull();
     expect(why("abc")).toMatch(/digits only/);
+    // A space between digits is never dropped: "1 5" must not become fifteen.
+    expect(raw("1 5")).toBeNull();
+    expect(why("1 5")).toBe("Write the amount without spaces, like 1000.50.");
+    expect(why("10 000")).toMatch(/without spaces/);
+    expect(why("1\t5")).toMatch(/without spaces/);
     expect(why("-5")).toMatch(/digits only/);
     expect(why("1e6")).toMatch(/digits only/);
     expect(why("0x10")).toMatch(/digits only/);

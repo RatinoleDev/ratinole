@@ -12,7 +12,7 @@ import { startLivePrices } from "./market/live";
 import { redisConnection } from "./redis";
 import { FreshDataPendingError, hourFloor } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
-import { runAgentAndRecord, tick } from "./tick";
+import { retryDelayMs, runAgentAndRecord, tick } from "./tick";
 import { OrderPendingError, withoutUrls } from "./vault/chain";
 import { liveChainFromEnv } from "./vault/setup";
 
@@ -34,7 +34,10 @@ async function handle(job: Job): Promise<unknown> {
           await prisma.engineRun.updateMany({ where: { hour: new Date(job.data.upToHour) }, data: { errors: { increment: 1 } } });
           log("error", "agent job failed", { agentId: job.data.agentId, error: withoutUrls(err) });
         }
-        throw err;
+        // What is thrown is stored with the job. The two "not yet" signals carry no addresses; anything else goes
+        // on without RPC addresses, which can hold an access key.
+        if (err instanceof FreshDataPendingError || err instanceof OrderPendingError) throw err;
+        throw new Error(withoutUrls(err));
       }
     case "backtest":
       return runBacktest(job.data.backtestId, deps);
@@ -50,9 +53,12 @@ async function start() {
   await queue.upsertJobScheduler("hourly-tick", { pattern: `${env.runMinute()} * * * *`, tz: "UTC" }, { name: "tick", data: {} });
   await queue.upsertJobScheduler("daily-example", { pattern: "23 4 * * *", tz: "UTC" }, { name: "example", data: {} });
 
-  const worker = new Worker(ENGINE_QUEUE, handle, { connection: redisConnection(), concurrency: 4 });
+  const worker = new Worker(ENGINE_QUEUE, handle, { connection: redisConnection(), concurrency: 4, settings: { backoffStrategy: retryDelayMs } });
   worker.on("failed", (job, err) => {
-    if (!(err instanceof FreshDataPendingError) && !(err instanceof OrderPendingError)) log("warn", "job failed", { name: job?.name, id: job?.id, error: withoutUrls(err) });
+    const waiting = err instanceof FreshDataPendingError || err instanceof OrderPendingError;
+    if (!waiting) log("warn", "job failed", { name: job?.name, id: job?.id, error: withoutUrls(err) });
+    // A job that waited to the end without an answer must not vanish silently: the next hourly run picks it up.
+    else if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) log("warn", "gave up waiting; the next hourly run will finish it", { name: job.name, id: job.id, why: err.message });
   });
 
   const live = startLivePrices(redis);

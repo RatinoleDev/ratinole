@@ -1,6 +1,6 @@
 /** Agents, paper and live: launch, list, pause/resume, decision log, and the wallet overview. */
 import { HOUR_MS, maxDrawdownPct, type Plan } from "@rationale/brain";
-import { LIVE, LIVE_TOKENS, PAPER, isMarketId, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
+import { LIVE, LIVE_TOKENS, PAPER, isMarketId, strayTokensArePosition, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
 import type { Prisma, User } from "@rationale/db";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -14,10 +14,19 @@ const LaunchBody = z.object({ backtestId: z.string().min(1).max(64), name: z.str
 const PatchBody = z.object({ status: z.enum(["active", "paused"]) });
 const ModeQuery = z.object({ mode: Mode.optional() });
 
-/** A token balance worth less than this is not a position (the engine uses the same line). */
-const DUST_USD = 1;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-type LiveCheck = { ok: true; vault: string; cash: number; qty: number; price: number | null; equity: number } | { ok: false; status: number; error: string; message: string };
+type LiveCheck =
+  | {
+      ok: true;
+      vault: string;
+      cash: number;
+      /** Every unit of the market token in the vault, and what the oracle says it is worth (null: no price now). */
+      tokenQty: number;
+      tokenUsd: number | null;
+      price: number | null;
+    }
+  | { ok: false; status: number; error: string; message: string };
 const DecisionsQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), before: z.string().datetime().optional() });
 
 const nextHour = (ms: number) => Math.floor(ms / HOUR_MS) * HOUR_MS + HOUR_MS;
@@ -50,13 +59,14 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (launchedOn && launchedOn.toLowerCase() !== info.vault) {
       return no(409, "other_vault", "This agent was launched on a vault you no longer use. Delete it and launch a new one on your current vault.");
     }
-    if (info.operator !== operator) return no(409, "agent_access", "The agent's access to your vault is switched off. Restore it on the Vault page.");
+    // "No operator" on both sides is not a match: a vault nobody may trade has its access off.
+    if (operator === ZERO_ADDRESS || info.operator !== operator) return no(409, "agent_access", "The agent's access to your vault is switched off. Restore it on the Vault page.");
     if (info.paused) return no(409, "vault_paused", "Your vault is paused. Resume it on the Vault page.");
     if (!info.token.tradable) return no(409, "token_not_allowed", `Your vault does not allow ${LIVE_TOKENS[market].symbol} trades.`);
     // The token is only counted when the oracle has a price for it; cash always counts.
     const price = info.token.priceUsd;
-    const held = price != null && info.token.qty * price >= DUST_USD ? info.token.qty : 0;
-    const equity = info.cash + held * (price ?? 0);
+    const tokenUsd = price == null ? null : info.token.qty * price;
+    const equity = info.cash + (tokenUsd ?? 0);
     if (equity < LIVE.minVaultUsd) {
       return no(
         409,
@@ -69,10 +79,55 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     // The cap counts everything in the vault that the agent's key could trade, not just this agent's market.
     const total = equity + info.otherUsd;
     const cap = deps.env.liveMaxVaultUsd;
-    if (launching && cap != null && total > cap) {
-      return no(409, "beta_cap", `While the contracts have not been audited, a vault may hold at most $${cap.toLocaleString("en-US")} when a live agent starts. Yours holds about $${Math.floor(total).toLocaleString("en-US")}.`);
+    if (launching && cap != null) {
+      // The cap is a statement about how much is at stake. A balance the oracle cannot price right now makes that
+      // unknown, and unknown is not "under the cap".
+      if ((price == null && info.token.qty > 0) || info.otherUnpriced) {
+        return no(409, "cap_unpriced", "Your vault holds a token the price oracle has no fresh price for right now, so its value cannot be checked against the launch limit. Try again in a moment.");
+      }
+      if (total > cap) {
+        return no(409, "beta_cap", `While the contracts have not been audited, a vault may hold at most $${cap.toLocaleString("en-US")} when a live agent starts. Yours holds about $${Math.floor(total).toLocaleString("en-US")}.`);
+      }
     }
-    return { ok: true, vault: info.vault, cash: info.cash, qty: held, price, equity };
+    return { ok: true, vault: info.vault, cash: info.cash, tokenQty: info.token.qty, tokenUsd, price };
+  }
+
+  /**
+   * While an agent is stopped nobody watches its vault. Dollars that came or went are counted exactly whenever
+   * they are seen. Tokens are different: if the owner took the agent's ETH out last week, valuing that at today's
+   * price would book a week of the market's moves as the agent's doing. So when the token balance is not the one
+   * the agent left, measuring starts again from the vault as it is now, and the return carries on from where it
+   * stood when the agent stopped.
+   */
+  async function restartMeasurementIfTokensMoved(a: { id: string; plan: Prisma.JsonValue; startingCash: number }, vault: Extract<LiveCheck, { ok: true }>) {
+    const state = await deps.prisma.agentState.findUnique({ where: { agentId: a.id } });
+    if (!state || vault.price == null || vault.tokenUsd == null) return;
+    const plan = a.plan as unknown as Plan;
+    const counts = state.qty > 0 ? vault.tokenUsd >= LIVE.positionFloorUsd : strayTokensArePosition(vault.tokenUsd, vault.cash, plan.sizePctOfCash);
+    const qty = counts ? vault.tokenQty : 0;
+    if (Math.abs(qty - state.qty) * vault.price < LIVE.positionFloorUsd) return;
+    const last = await deps.prisma.decision.findFirst({ where: { agentId: a.id }, orderBy: { hour: "desc" }, select: { equityAfter: true, basisAfter: true } });
+    const perUnit = last?.basisAfter && last.basisAfter > 0 && last.equityAfter > 0 ? last.equityAfter / last.basisAfter : 1;
+    const equity = vault.cash + qty * vault.price;
+    const basis = equity / perUnit;
+    if (!Number.isFinite(basis) || basis <= 0) return;
+    const scale = a.startingCash > 0 ? basis / a.startingCash : 1;
+    await deps.prisma.$transaction([
+      deps.prisma.agentState.update({
+        where: { agentId: a.id },
+        data: {
+          cash: vault.cash,
+          qty,
+          avgEntry: qty > 0 ? vault.price : null,
+          peak: qty > 0 ? vault.price : null,
+          dayStart: new Date(Math.floor(now() / (24 * HOUR_MS)) * 24 * HOUR_MS),
+          dayStartEquity: equity,
+          lastEquity: equity,
+          ...(state.peakEquity != null ? { peakEquity: state.peakEquity * scale } : {}),
+        },
+      }),
+      deps.prisma.agent.update({ where: { id: a.id }, data: { startingCash: basis } }),
+    ]);
   }
 
   async function loadAgentDTO(id: string) {
@@ -97,7 +152,8 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     // One launch at a time per wallet: two requests sent together must not both pass the limits below. The lock
     // is held in Redis for the length of this request and released at the end.
     const lockKey = `lock:launch:${user.id}`;
-    if ((await deps.redis.set(lockKey, "1", "EX", 30, "NX")) !== "OK") {
+    // Held for longer than the slowest launch can take (the chain reads time out well inside a minute).
+    if ((await deps.redis.set(lockKey, "1", "EX", 90, "NX")) !== "OK") {
       return sendError(reply, 409, "busy", "Another launch from this wallet is still in progress. Try again in a moment.");
     }
     const launch = async () => {
@@ -118,6 +174,17 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
       name = clean;
     }
     const plan = bt.plan as unknown as Plan;
+    // Tokens already in the vault are the agent's starting position only when they are worth one of its own
+    // orders (the rule the engine uses every hour). Less than that is left alone, and the agent starts flat.
+    const start = vault?.ok
+      ? (() => {
+          const qty = vault.tokenUsd != null && strayTokensArePosition(vault.tokenUsd, vault.cash, plan.sizePctOfCash) ? vault.tokenQty : 0;
+          return { cash: vault.cash, qty, price: vault.price, equity: vault.cash + qty * (vault.price ?? 0) };
+        })()
+      : null;
+    if (start && start.equity < LIVE.minVaultUsd) {
+      return sendError(reply, 409, "vault_empty", `Deposit at least $${LIVE.minVaultUsd} of USDG into your vault first.`);
+    }
     const agent = await deps.prisma.agent.create({
       data: {
         userId: user.id,
@@ -130,21 +197,21 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         dailyLossCapPct: user.dailyLossCapPct,
         backtestId: bt.id,
         owedFrom: new Date(nextHour(now())),
-        ...(vault?.ok
+        ...(vault?.ok && start
           ? {
               mode: "live",
               vault: vault.vault,
               // Results are measured against what the vault held at launch. The engine reads the vault again
               // before every decision, so this is a starting point, never a claim about later balances.
-              startingCash: vault.equity,
+              startingCash: start.equity,
               state: {
                 create: {
-                  cash: vault.cash,
-                  qty: vault.qty,
-                  avgEntry: vault.qty > 0 ? vault.price : null,
-                  peak: vault.qty > 0 ? vault.price : null,
+                  cash: start.cash,
+                  qty: start.qty,
+                  avgEntry: start.qty > 0 ? start.price : null,
+                  peak: start.qty > 0 ? start.price : null,
                   dayStart: new Date(Math.floor(now() / (24 * HOUR_MS)) * 24 * HOUR_MS),
-                  dayStartEquity: vault.equity,
+                  dayStartEquity: start.equity,
                 },
               },
             }
@@ -200,6 +267,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         // A live agent only resumes on a vault that can be traded right now.
         const vault = await checkVault(user, a.market, false, a.vault);
         if (!vault.ok) return sendError(reply, vault.status, vault.error, vault.message);
+        await restartMeasurementIfTokensMoved(a, vault);
       }
       await deps.prisma.agent.update({
         where: { id: a.id },

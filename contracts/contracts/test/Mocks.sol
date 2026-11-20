@@ -5,6 +5,7 @@ pragma solidity 0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AgentVault} from "../AgentVault.sol";
 
 contract MockToken is ERC20 {
     uint8 private immutable _dec;
@@ -123,5 +124,31 @@ contract MockRouter {
         out = (p.amountIn * rate[p.tokenIn][p.tokenOut]) / 1e18;
         if (!ignoreMinimum) require(out >= p.amountOutMinimum, "Too little received");
         IERC20(p.tokenOut).transfer(divertTo == address(0) ? p.recipient : divertTo, out);
+    }
+}
+
+/// @notice Creates one vault and then refuses every call a vault makes to it, to show that a vault's ownership
+///         change never depends on its factory.
+contract BrokenFactory {
+    address public vault;
+    address private immutable router;
+    address[] private tokens;
+    address[] private feeds;
+
+    constructor(address router_, address[] memory tokens_, address[] memory feeds_) {
+        router = router_;
+        tokens = tokens_;
+        feeds = feeds_;
+    }
+
+    function create() external {
+        uint32[] memory staleness = new uint32[](tokens.length);
+        uint24[] memory tiers = new uint24[](tokens.length);
+        for (uint256 i; i < tokens.length; ++i) staleness[i] = 1 days;
+        vault = address(new AgentVault(msg.sender, address(0), router, 100, 1e21, tokens, feeds, staleness, tiers));
+    }
+
+    fallback() external {
+        revert("broken");
     }
 }

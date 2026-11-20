@@ -3,6 +3,7 @@
 const { expect } = require('chai');
 const { ethers, network } = require('hardhat');
 const netConfig = require('../scripts/netconfig');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 describe('AgentVault on a mainnet fork', function () {
   if (!process.env.FORK) return;
@@ -39,7 +40,7 @@ describe('AgentVault on a mainnet fork', function () {
   });
 
   it(`swaps 1 WETH -> stablecoin through the real Uniswap pool`, async () => {
-    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('1'), 0);
+    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('1'), 0, LATER);
     const got = Number(ethers.formatUnits(await stable.balanceOf(await vault.getAddress()), sDec));
     const eth = Number(ethers.formatUnits(await vault.priceUsd(T.WETH.address), 18));
     console.log(`      got ${got.toFixed(2)} ${cfg.stable} (oracle ${eth.toFixed(2)}, diff ${((got / eth - 1) * 100).toFixed(3)}%)`);
@@ -48,16 +49,16 @@ describe('AgentVault on a mainnet fork', function () {
 
   it('swaps back stablecoin -> WETH', async () => {
     const bal = await stable.balanceOf(await vault.getAddress());
-    await vault.connect(operator).swap(S.address, T.WETH.address, T.WETH.feeTier, bal, 0);
+    await vault.connect(operator).swap(S.address, T.WETH.address, T.WETH.feeTier, bal, 0, LATER);
     const w = Number(ethers.formatEther(await weth.balanceOf(await vault.getAddress())));
     console.log(`      WETH balance now ${w.toFixed(5)} (started with 2)`);
     expect(w).to.be.greaterThan(1.98);
   });
 
   if (T.cbBTC) it('small swap stablecoin -> cbBTC (BTC pool)', async () => {
-    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('0.1'), 0);
+    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('0.1'), 0, LATER);
     const bal = await stable.balanceOf(await vault.getAddress());
-    await vault.connect(operator).swap(S.address, T.cbBTC.address, T.cbBTC.feeTier, bal / 2n, 0);
+    await vault.connect(operator).swap(S.address, T.cbBTC.address, T.cbBTC.feeTier, bal / 2n, 0, LATER);
     const btc = await ethers.getContractAt(['function balanceOf(address) view returns (uint256)'], T.cbBTC.address);
     const got = Number(ethers.formatUnits(await btc.balanceOf(await vault.getAddress()), 8));
     console.log(`      got ${got.toFixed(8)} cbBTC`);
@@ -69,7 +70,7 @@ describe('AgentVault on a mainnet fork', function () {
   it('0.01% slippage cap: the direction worse than the oracle is rejected', async () => {
     await vault.connect(owner).setLimits(1, ethers.parseUnits('50000', 18));
     const v = await vault.getAddress();
-    const tryIt = async (from, to, amt) => vault.connect(operator).swap.staticCall(from, to, T.WETH.feeTier, amt, 0).then(() => 'passes', () => 'rejected');
+    const tryIt = async (from, to, amt) => vault.connect(operator).swap.staticCall(from, to, T.WETH.feeTier, amt, 0, LATER).then(() => 'passes', () => 'rejected');
     const sell = await tryIt(T.WETH.address, S.address, ethers.parseEther('0.5'));
     const sBal = await stable.balanceOf(v);
     const buy = sBal > 0n ? await tryIt(S.address, T.WETH.address, sBal) : 'rejected';
@@ -82,17 +83,17 @@ describe('AgentVault on a mainnet fork', function () {
   if (stocks.length) it(`stock tokens: buy and sell back ${stocks.map((t) => t.symbol).join(', ')}`, async () => {
     await vault.connect(owner).setLimits(300, ethers.parseUnits('50000', 18)); // 3%: 0.3% pools + oracle lag
     const v = await vault.getAddress();
-    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('0.5'), 0);
+    await vault.connect(operator).swap(T.WETH.address, S.address, T.WETH.feeTier, ethers.parseEther('0.5'), 0, LATER);
     const live = (await ethers.provider.getBlock('latest')).timestamp;
     for (const t of stocks) {
       const tok = await ethers.getContractAt(['function balanceOf(address) view returns (uint256)'], t.address);
       const px = Number(ethers.formatUnits(await vault.priceUsd(t.address).catch(() => 0n), 18));
       if (!px) { console.log(`      ${t.symbol}: oracle stale (market closed) — swap correctly blocked`); continue; }
-      await vault.connect(operator).swap(S.address, t.address, t.feeTier, ethers.parseUnits('40', sDec), 0);
+      await vault.connect(operator).swap(S.address, t.address, t.feeTier, ethers.parseUnits('40', sDec), 0, LATER);
       const got = await tok.balanceOf(v);
       const usd = Number(ethers.formatEther(got)) * px;
       const back0 = await stable.balanceOf(v);
-      await vault.connect(operator).swap(t.address, S.address, t.feeTier, got, 0);
+      await vault.connect(operator).swap(t.address, S.address, t.feeTier, got, 0, LATER);
       const back = Number(ethers.formatUnits((await stable.balanceOf(v)) - back0, sDec));
       console.log(`      ${t.symbol.padEnd(5)} $${px.toFixed(2)}  bought $${usd.toFixed(2)} worth, sold back for $${back.toFixed(2)}`);
       expect(usd).to.be.greaterThan(40 * 0.95);

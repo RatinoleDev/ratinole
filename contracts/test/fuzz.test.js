@@ -9,6 +9,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 const SEED = Number(process.env.FUZZ_SEED || 20261114);
 const RUNS = Number(process.env.FUZZ_RUNS || 300);
@@ -73,7 +74,7 @@ describe(`AgentVault fuzz (seed ${SEED}, ${RUNS} steps)`, function () {
       const action = rnd();
       if (action < 0.08) { // unauthorized callers
         const who = pick([stranger, owner, admin]);
-        await expect(vault.connect(who).swap(usdc, weth, 500, 1n, 0)).to.be.reverted;
+        await expect(vault.connect(who).swap(usdc, weth, 500, 1n, 0, LATER)).to.be.reverted;
         if (who !== owner) await expect(vault.connect(who).withdraw(usdc, 1n, who.address)).to.be.reverted;
         stats.unauthorized++;
         continue;
@@ -102,7 +103,7 @@ describe(`AgentVault fuzz (seed ${SEED}, ${RUNS} steps)`, function () {
 
       const beforeIn = await tin.balanceOf(vault), beforeOut = await tout.balanceOf(vault);
       let ok = true;
-      try { await vault.connect(operator).swap(tin, tout, 500, amountIn, 0); } catch { ok = false; }
+      try { await vault.connect(operator).swap(tin, tout, 500, amountIn, 0, LATER); } catch { ok = false; }
       const afterIn = await tin.balanceOf(vault), afterOut = await tout.balanceOf(vault);
 
       if (ok) {

@@ -20,6 +20,8 @@ export interface VaultInfo {
   token: { qty: number; tradable: boolean; priceUsd: number | null };
   /** Dollars of the other tokens this site trades that sit in the vault, as far as the oracle prices them. */
   otherUsd: number;
+  /** One of those other tokens is in the vault and the oracle has no price for it: `otherUsd` is then too low. */
+  otherUnpriced: boolean;
 }
 
 export interface VaultReader {
@@ -48,11 +50,11 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
   const factory = { address: opts.factory as Address, abi: FACTORY_ABI } as const;
 
   /** The factory's own settings for each token: what an untouched vault has. Read once; they never change. */
-  let defaults: Promise<Map<string, { feed: string; feeTier: number }>> | null = null;
+  let defaults: Promise<Map<string, { feed: string; feeTier: number; maxStaleness: number }>> | null = null;
   const factoryDefaults = () => {
     defaults ??= pub
       .readContract({ ...factory, functionName: "getDefaults" })
-      .then(([, tokens, feeds, , feeTiers]) => new Map(tokens.map((t, i) => [lower(t), { feed: lower(feeds[i]!), feeTier: feeTiers[i]! }])))
+      .then(([, tokens, feeds, staleness, feeTiers]) => new Map(tokens.map((t, i) => [lower(t), { feed: lower(feeds[i]!), feeTier: feeTiers[i]!, maxStaleness: staleness[i]! }])))
       .catch((err) => {
         defaults = null;
         throw err;
@@ -100,13 +102,15 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
       const stableCfg = must<TokenConfig>(4);
       const sameAsFactory = (addr: Address, cfg: TokenConfig) => {
         const d = expected.get(lower(addr));
-        return !!d && cfg[0] && lower(cfg[4]) === d.feed && cfg[3] === d.feeTier;
+        return !!d && cfg[0] && lower(cfg[4]) === d.feed && cfg[3] === d.feeTier && cfg[2] === d.maxStaleness;
       };
       let otherUsd = 0;
+      let otherUnpriced = false;
       others.forEach((t, k) => {
-        const bal = may<bigint>(8 + 2 * k);
+        const bal = must<bigint>(8 + 2 * k);
         const px = may<bigint>(9 + 2 * k);
-        if (bal != null && px != null) otherUsd += fromUnits(bal, t.decimals) * fromUnits(px, 18);
+        if (px != null) otherUsd += fromUnits(bal, t.decimals) * fromUnits(px, 18);
+        else if (bal > 0n) otherUnpriced = true;
       });
       const price = may<bigint>(7);
       return {
@@ -121,6 +125,7 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
           priceUsd: price == null ? null : fromUnits(price, 18),
         },
         otherUsd,
+        otherUnpriced,
       };
     },
   };

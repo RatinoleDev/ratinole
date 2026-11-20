@@ -7,6 +7,9 @@ import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE, LIVE_STABLE, VAULT_ABI, fromUnits,
 import {
   BaseError,
   ContractFunctionRevertedError,
+  ExecutionRevertedError,
+  InsufficientFundsError,
+  RpcRequestError,
   createPublicClient,
   createWalletClient,
   defineChain,
@@ -48,6 +51,8 @@ export interface SwapRequest {
   tokenOut: Address;
   feeTier: number;
   amountIn: bigint;
+  /** Unix seconds. The vault refuses the order after this, so a signed order can never trade late. */
+  deadline: number;
 }
 
 export type SwapOutcome =
@@ -61,6 +66,8 @@ export interface VaultChain {
   /** The address of the key this engine signs with. A vault must name it as operator. */
   readonly operator: Address;
   blockNumber(): Promise<bigint>;
+  /** The chain's own clock: the time of its newest block, in unix seconds. Order deadlines are judged by it. */
+  chainTime(): Promise<number>;
   /** Reads the vault. With `atLeastBlock`, refuses (OrderPendingError) a connection that has not reached that block yet. */
   snapshot(vault: Address, token: LiveToken, atLeastBlock?: bigint): Promise<VaultSnapshot>;
   /**
@@ -80,17 +87,38 @@ const lower = (a: string) => a.toLowerCase() as Address;
 /** What `tokens(address)` returns: allowed, decimals, maxStaleness, feeTier, feed. */
 type TokenConfig = readonly [boolean, number, number, number, Address];
 
-/**
- * The contract's own refusal inside an error, if that is what it is. viem also dresses a node's plain "Internal
- * error" as a revert, so only a decoded error, a reason string or the node's own "execution reverted" counts.
- */
-function contractRevert(err: unknown): ContractFunctionRevertedError | null {
-  if (!(err instanceof BaseError)) return null;
-  const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
-  if (!(revert instanceof ContractFunctionRevertedError)) return null;
-  if (revert.data?.errorName || revert.reason) return revert;
-  return /execution reverted/i.test(`${err.shortMessage} ${err.details ?? ""}`) ? revert : null;
+/** The contract's own refusal: its named error if it could be decoded, and whatever text came with it. */
+interface Revert {
+  errorName?: string;
+  text: string;
 }
+
+/**
+ * The contract's own refusal inside an error, if that is what it is.
+ *
+ * This is decided by what the node itself answered, not by the wrapper the library puts around it: the library
+ * dresses a node's plain "Internal error" (code -32603, no data) as a revert, and leaves a real revert that some
+ * nodes report as code -32000 "execution reverted" undressed. Reading either wrongly is costly. A node hiccup
+ * read as "the vault refused" writes an order off that should have been tried again; a refusal read as a hiccup
+ * is retried all hour and never recorded. So a revert is: a decoded contract error, or revert data, or the
+ * node's own code 3, or the node's own words "execution reverted".
+ */
+function contractRevert(err: unknown): Revert | null {
+  if (!(err instanceof BaseError)) return null;
+  const dressed = err.walk((e) => e instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
+  const rpc = err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null;
+  const said = rpc?.details ?? "";
+  const text = `${dressed?.reason ?? ""} ${said} ${err.shortMessage}`;
+  if (dressed?.data?.errorName) return { errorName: dressed.data.errorName, text };
+  if (dressed?.raw && dressed.raw !== "0x") return { text };
+  if (rpc?.code === 3 || /execution reverted/i.test(said)) return { text };
+  if (!rpc && err.walk((e) => e instanceof ExecutionRevertedError)) return { text };
+  return null;
+}
+
+/** Everything the node said in an error, for matching its wording. */
+const nodeWords = (err: BaseError) => `${err.shortMessage} ${err.details ?? ""} ${(err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null)?.details ?? ""}`;
+const NO_GAS_MONEY = /insufficient funds|insufficient balance|gas required exceeds allowance/i;
 
 /**
  * True when the network certainly refused a transaction outright, so it can never be mined. "Nonce too low" and
@@ -98,14 +126,15 @@ function contractRevert(err: unknown): ContractFunctionRevertedError | null {
  */
 function refusedOutright(err: unknown): boolean {
   if (!(err instanceof BaseError)) return false;
-  return /insufficient funds|intrinsic gas|exceeds block gas limit|underpriced|fee cap|max fee per gas/i.test(`${err.shortMessage} ${err.details ?? ""}`);
+  if (err.walk((e) => e instanceof InsufficientFundsError)) return true;
+  return new RegExp(`${NO_GAS_MONEY.source}|intrinsic gas|exceeds block gas limit|underpriced|fee cap|max fee per gas`, "i").test(nodeWords(err));
 }
 
 /** Plain words for why an order was refused. Shown to the vault's owner in the decision log. */
 export function refusalReason(err: unknown): string {
   const revert = contractRevert(err);
   if (revert) {
-    switch (revert.data?.errorName) {
+    switch (revert.errorName) {
       case "NotOperator":
         return "the agent's access to the vault was revoked";
       case "Paused":
@@ -124,15 +153,16 @@ export function refusalReason(err: unknown): string {
         return "the pool price was worse than the vault's slippage limit";
       case "ZeroAmount":
         return "there was nothing to trade";
+      case "OrderExpired":
+        return "the order was placed too late in the hour";
     }
-    const text = revert.reason ?? revert.shortMessage;
     // Uniswap's router refuses with this text when the pool cannot meet the minimum output.
-    if (/too little received|SPL/i.test(text)) return "the pool price moved too far while the order was being placed";
+    if (/too little received|SPL/i.test(revert.text)) return "the pool price moved too far while the order was being placed";
     // "STF": the router could not take the tokens in, because the vault holds less than the order asked for.
-    if (/\bSTF\b/.test(text)) return "the vault holds less than the order needed";
+    if (/\bSTF\b/.test(revert.text)) return "the vault holds less than the order needed";
     return "the vault refused the order";
   }
-  if (err instanceof BaseError && /insufficient funds/i.test(err.shortMessage)) return "the agent's own wallet is out of gas money";
+  if (err instanceof BaseError && (err.walk((e) => e instanceof InsufficientFundsError) || NO_GAS_MONEY.test(nodeWords(err)))) return "the agent's own wallet is out of gas money";
   return "the network refused the order";
 }
 
@@ -173,11 +203,11 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
   };
 
   /** The factory's own settings for each token: what an untouched vault has. Read once; they never change. */
-  let defaults: Promise<Map<string, { feed: string; feeTier: number }>> | null = null;
+  let defaults: Promise<Map<string, { feed: string; feeTier: number; maxStaleness: number }>> | null = null;
   const factoryDefaults = () => {
     defaults ??= pub
       .readContract({ address: opts.factory, abi: FACTORY_ABI, functionName: "getDefaults" })
-      .then(([, tokens, feeds, , feeTiers]) => new Map(tokens.map((t, i) => [lower(t), { feed: lower(feeds[i]!), feeTier: feeTiers[i]! }])))
+      .then(([, tokens, feeds, staleness, feeTiers]) => new Map(tokens.map((t, i) => [lower(t), { feed: lower(feeds[i]!), feeTier: feeTiers[i]!, maxStaleness: staleness[i]! }])))
       .catch((err) => {
         defaults = null;
         throw err;
@@ -213,6 +243,7 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
   return {
     operator: lower(account.address),
     blockNumber: latestBlock,
+    chainTime: async () => Number((await pub.getBlock({ blockTag: "latest" })).timestamp),
 
     async snapshot(vault, token, atLeastBlock) {
       let block = await latestBlock();
@@ -252,7 +283,7 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
       const stableCfg = must<TokenConfig>(4);
       const sameAsFactory = (addr: Address, cfg: TokenConfig) => {
         const d = expected.get(lower(addr));
-        return !!d && cfg[0] && lower(cfg[4]) === d.feed && cfg[3] === d.feeTier;
+        return !!d && cfg[0] && lower(cfg[4]) === d.feed && cfg[3] === d.feeTier && cfg[2] === d.maxStaleness;
       };
       const price = r[8]?.status === "success" ? (r[8].result as bigint) : null;
       return {
@@ -272,7 +303,7 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
     swap: (req, onSigned) =>
       inTurn(async () => {
         const call = (minOut: bigint) =>
-          ({ account, address: req.vault, abi: VAULT_ABI, functionName: "swap", args: [req.tokenIn, req.tokenOut, req.feeTier, req.amountIn, minOut] }) as const;
+          ({ account, address: req.vault, abi: VAULT_ABI, functionName: "swap", args: [req.tokenIn, req.tokenOut, req.feeTier, req.amountIn, minOut, BigInt(req.deadline)] }) as const;
         let serialized: Hex;
         try {
           // A dry run first: an order the vault would refuse costs nothing and is never signed.

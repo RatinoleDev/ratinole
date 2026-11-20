@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 const usd = (n) => ethers.parseUnits(String(n), 18); // USD value, 18 decimals
 const U = (n) => ethers.parseUnits(String(n), 6); // USDC
@@ -72,74 +73,74 @@ describe('AgentVault', function () {
 
   describe('operator swaps', () => {
     it('fair-price swap succeeds, output lands in the vault, approval reset to 0', async () => {
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0))
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0, LATER))
         .to.emit(vault, 'Swapped');
       expect(await weth.balanceOf(vault)).to.equal(W(0.5));
       expect(await usdc.balanceOf(vault)).to.equal(U(49_000));
       expect(await usdc.allowance(vault, router)).to.equal(0);
     });
     it('only the operator can swap (not even the owner)', async () => {
-      await expect(vault.connect(stranger).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'NotOperator');
-      await expect(vault.connect(owner).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'NotOperator');
+      await expect(vault.connect(stranger).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'NotOperator');
+      await expect(vault.connect(owner).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'NotOperator');
     });
     it('rejects a bad price (3% below oracle) even when the operator passes minOut 0', async () => {
       await router.setRate(usdc, weth, 485n * 10n ** 24n); // 3% worse
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0)).to.be.revertedWith('Too little received');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0, LATER)).to.be.revertedWith('Too little received');
     });
     it('a malicious router ignoring the minimum is still caught by the vault balance check', async () => {
       await router.setRate(usdc, weth, 1n * 10n ** 26n); // 80% worse
       await router.setEvil(true, ethers.ZeroAddress);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0)).to.be.revertedWithCustomError(vault, 'InsufficientOutput');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0, LATER)).to.be.revertedWithCustomError(vault, 'InsufficientOutput');
     });
     it('rejects swap output diverted to another address', async () => {
       await router.setEvil(true, stranger.address);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0)).to.be.revertedWithCustomError(vault, 'InsufficientOutput');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), 0, LATER)).to.be.revertedWithCustomError(vault, 'InsufficientOutput');
       expect(await usdc.balanceOf(vault)).to.equal(U(50_000));
     });
     it('honours a stricter operator minOut', async () => {
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), W(0.6))).to.be.revertedWith('Too little received');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1000), W(0.6), LATER)).to.be.revertedWith('Too little received');
     });
     it('operator cannot route through a different pool than the pinned fee tier', async () => {
       for (const tier of [100, 3000, 10000]) {
-        await expect(vault.connect(operator).swap(usdc, weth, tier, U(100), 0)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
+        await expect(vault.connect(operator).swap(usdc, weth, tier, U(100), 0, LATER)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
       }
-      await vault.connect(operator).swap(usdc, weth, 500, U(100), 0); // pinned tier works
+      await vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER); // pinned tier works
     });
     it('owner can re-pin a token to another pool; invalid tiers are rejected', async () => {
       await vault.connect(owner).setToken(weth, fWeth, 3600, 3000);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
       await expect(vault.connect(owner).setToken(weth, fWeth, 3600, 123)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
     });
     it('rejects unlisted tokens, same-token swaps and odd fee tiers', async () => {
       await other.mint(vault, W(1));
-      await expect(vault.connect(operator).swap(other, usdc, 500, W(1), 0)).to.be.revertedWithCustomError(vault, 'TokenNotAllowed');
-      await expect(vault.connect(operator).swap(usdc, usdc, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'SameToken');
-      await expect(vault.connect(operator).swap(usdc, weth, 123, U(1), 0)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
-      await expect(vault.connect(operator).swap(usdc, weth, 500, 0, 0)).to.be.revertedWithCustomError(vault, 'ZeroAmount');
+      await expect(vault.connect(operator).swap(other, usdc, 500, W(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'TokenNotAllowed');
+      await expect(vault.connect(operator).swap(usdc, usdc, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'SameToken');
+      await expect(vault.connect(operator).swap(usdc, weth, 123, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'BadFeeTier');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, 0, 0, LATER)).to.be.revertedWithCustomError(vault, 'ZeroAmount');
     });
   });
 
   describe('oracle', () => {
     it('rejects stale prices', async () => {
       await time.increase(2 * HOUR);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.be.revertedWithCustomError(vault, 'StaleOraclePrice');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.be.revertedWithCustomError(vault, 'StaleOraclePrice');
     });
     it('rejects zero / negative prices', async () => {
       await fWeth.set(0, await time.latest());
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.be.revertedWithCustomError(vault, 'BadOraclePrice');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.be.revertedWithCustomError(vault, 'BadOraclePrice');
     });
   });
 
   describe('daily limit', () => {
     it('caps total swaps per 24h, then resets', async () => {
       await vault.connect(owner).setLimits(100, usd(1000));
-      await vault.connect(operator).swap(usdc, weth, 500, U(600), 0);
+      await vault.connect(operator).swap(usdc, weth, 500, U(600), 0, LATER);
       expect(await vault.remainingDailyUsd()).to.equal(usd(400));
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(600), 0)).to.be.revertedWithCustomError(vault, 'DailyLimitExceeded');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(600), 0, LATER)).to.be.revertedWithCustomError(vault, 'DailyLimitExceeded');
       await time.increase(24 * HOUR);
       await fWeth.set(2000_0000_0000n, await time.latest());
       await fUsdc.set(1_0000_0000n, await time.latest());
-      await vault.connect(operator).swap(usdc, weth, 500, U(600), 0);
+      await vault.connect(operator).swap(usdc, weth, 500, U(600), 0, LATER);
     });
   });
 
@@ -153,18 +154,40 @@ describe('AgentVault', function () {
     });
     it('pause stops swaps but the owner can still withdraw', async () => {
       await vault.connect(owner).setPaused(true);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'Paused');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'Paused');
       await vault.connect(owner).withdraw(usdc, U(50_000), owner.address);
       expect(await usdc.balanceOf(owner.address)).to.equal(U(50_000));
     });
     it('revoking the operator disables the agent', async () => {
       await vault.connect(owner).setOperator(ethers.ZeroAddress);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'NotOperator');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'NotOperator');
     });
     it('removing a token makes it untradeable', async () => {
       await vault.connect(owner).removeToken(weth);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0)).to.be.revertedWithCustomError(vault, 'TokenNotAllowed');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'TokenNotAllowed');
       expect(await vault.allowedTokens()).to.deep.equal([await usdc.getAddress()]);
+    });
+  });
+
+  describe('order deadline', () => {
+    it('an order is refused once its deadline has passed, whoever holds it until then', async () => {
+      const now = await time.latest();
+      const deadline = now + 600;
+      // In time: it goes through, to the second.
+      await time.setNextBlockTimestamp(deadline);
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, deadline)).to.emit(vault, 'Swapped');
+      // One second late: refused, and nothing moves.
+      const before = await usdc.balanceOf(vault);
+      await time.setNextBlockTimestamp(deadline + 1);
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, deadline))
+        .to.be.revertedWithCustomError(vault, 'OrderExpired').withArgs(deadline);
+      expect(await usdc.balanceOf(vault)).to.equal(before);
+      // A refused order does not use up the daily limit.
+      expect(await vault.remainingDailyUsd()).to.equal(usd(10_000) - usd(100));
+    });
+
+    it('a deadline of zero is always in the past', async () => {
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, 0)).to.be.revertedWithCustomError(vault, 'OrderExpired');
     });
   });
 });

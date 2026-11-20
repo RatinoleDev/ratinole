@@ -2,6 +2,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time, takeSnapshot } = require('@nomicfoundation/hardhat-network-helpers');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 const usd = (n) => ethers.parseUnits(String(n), 18);
 const U = (n) => ethers.parseUnits(String(n), 6);
@@ -107,35 +108,69 @@ describe('AgentVault ownership and recovery', function () {
       await vault.connect(owner).transferOwnership(newOwner.address);
       await expect(vault.connect(newOwner).acceptOwnership()).to.emit(vault, 'OperatorChanged').withArgs(operator.address, ethers.ZeroAddress);
       expect(await vault.operator()).to.equal(ethers.ZeroAddress);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.be.revertedWithCustomError(vault, 'NotOperator');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.be.revertedWithCustomError(vault, 'NotOperator');
       await vault.connect(newOwner).setOperator(operator.address);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.emit(vault, 'Swapped');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.emit(vault, 'Swapped');
     });
 
-    it('the ownership change stands even when the factory cannot be told about it', async () => {
-      // Whoever accepts chooses how much gas to send. Find an amount where the factory's part runs out and the
-      // vault's part does not: the vault must still have moved.
+    it("no amount of gas moves the vault without the factory's list following", async () => {
+      // Whoever accepts chooses how much gas to send, and a wallet's gas estimate is the least that succeeds.
+      // At every amount, either nothing happens or the vault AND the list move together.
       await vault.connect(owner).transferOwnership(newOwner.address);
       const snap = await takeSnapshot();
-      let seen = false;
-      for (let gas = 45_000; gas <= 110_000 && !seen; gas += 1_000) {
+      let refused = 0;
+      let moved = 0;
+      for (let gas = 40_000; gas <= 260_000; gas += 2_000) {
         await snap.restore();
         try {
           await (await vault.connect(newOwner).acceptOwnership({ gasLimit: gas })).wait();
         } catch {
-          continue; // not enough gas for the vault itself: nothing happened
+          refused++;
+          expect(await vault.owner(), `gas ${gas}`).to.equal(owner.address);
+          continue;
         }
-        if ((await factory.vaultOf(newOwner.address)) === ethers.ZeroAddress) seen = true;
+        moved++;
+        expect(await vault.owner(), `gas ${gas}`).to.equal(newOwner.address);
+        expect(await factory.vaultOf(newOwner.address), `gas ${gas}`).to.equal(await vault.getAddress());
+        expect(await factory.vaultOf(owner.address), `gas ${gas}`).to.equal(ethers.ZeroAddress);
       }
-      expect(seen, 'no gas amount made only the factory call fail').to.equal(true);
-      expect(await vault.owner()).to.equal(newOwner.address);
-      // The list is out of date: it still names the old owner. Neither wallet is held back by that.
-      expect(await factory.vaultOf(owner.address)).to.equal(await vault.getAddress());
-      await expect(factory.connect(owner).createVault(100, usd(1_000))).to.emit(factory, 'VaultCreated');
-      expect(await factory.vaultOf(owner.address)).to.not.equal(await vault.getAddress());
-      await factory.connect(newOwner).listVault(await vault.getAddress());
+      expect(refused).to.be.greaterThan(10);
+      expect(moved).to.be.greaterThan(10);
+
+      // The same holds for the gas a wallet would estimate, sent exactly, for a transfer and for a recovery.
+      await snap.restore();
+      const estimate = await vault.connect(newOwner).acceptOwnership.estimateGas();
+      await (await vault.connect(newOwner).acceptOwnership({ gasLimit: estimate })).wait();
       expect(await factory.vaultOf(newOwner.address)).to.equal(await vault.getAddress());
-      await expect(vault.connect(newOwner).withdraw(usdc, U(5_000), newOwner.address)).to.emit(vault, 'Withdrawn');
+      await vault.connect(newOwner).setRecovery(rescue.address, 3 * DAY);
+      await vault.connect(rescue).startRecovery();
+      await time.increase(3 * DAY);
+      const estimate2 = await vault.connect(rescue).completeRecovery.estimateGas();
+      await (await vault.connect(rescue).completeRecovery({ gasLimit: estimate2 })).wait();
+      expect(await factory.vaultOf(rescue.address)).to.equal(await vault.getAddress());
+      expect(await factory.vaultOf(newOwner.address)).to.equal(ethers.ZeroAddress);
+    });
+
+    it('a listing left behind by a broken factory call holds nobody back', async () => {
+      // A vault whose factory cannot take the call at all: the ownership change must still stand.
+      const broken = await ethers.deployContract('BrokenFactory', [await router.getAddress(), [await usdc.getAddress()], [await fUsdc.getAddress()]]);
+      await broken.connect(owner).create();
+      const v = await ethers.getContractAt('AgentVault', await broken.vault());
+      await usdc.mint(v, U(100));
+      await v.connect(owner).transferOwnership(newOwner.address);
+      await expect(v.connect(newOwner).acceptOwnership()).to.emit(v, 'OwnershipTransferred').withArgs(owner.address, newOwner.address);
+      await v.connect(newOwner).withdraw(usdc, U(100), newOwner.address);
+      expect(await usdc.balanceOf(newOwner.address)).to.equal(U(100));
+    });
+
+    it("the agent's key can never be offered the vault, in either order", async () => {
+      await expect(vault.connect(owner).transferOwnership(operator.address)).to.be.revertedWithCustomError(vault, 'BadOperator');
+      await vault.connect(owner).transferOwnership(newOwner.address);
+      await expect(vault.connect(owner).setOperator(newOwner.address)).to.be.revertedWithCustomError(vault, 'BadOperator');
+      expect(await vault.operator()).to.equal(operator.address);
+      // Cancelling the offer, or revoking the agent, is always allowed.
+      await vault.connect(owner).transferOwnership(ethers.ZeroAddress);
+      await vault.connect(owner).setOperator(ethers.ZeroAddress);
     });
 
     it('only the owner can start a transfer, and address(0) cancels it', async () => {
@@ -261,7 +296,7 @@ describe('AgentVault ownership and recovery', function () {
     it("a new owner starts clean: the previous owner's recovery wallet has no power", async () => {
       await vault.connect(owner).setRecovery(rescue.address, 3 * DAY);
       await vault.connect(owner).transferOwnership(newOwner.address);
-      await vault.connect(newOwner).acceptOwnership();
+      await expect(vault.connect(newOwner).acceptOwnership()).to.emit(vault, 'RecoverySet').withArgs(ethers.ZeroAddress, 0);
       expect(await vault.recovery()).to.equal(ethers.ZeroAddress);
       await expect(vault.connect(rescue).startRecovery()).to.be.revertedWithCustomError(vault, 'NotRecovery');
     });
@@ -275,10 +310,10 @@ describe('AgentVault ownership and recovery', function () {
       await fUsdc.set(1_0000_0000n, now);
       await fWeth.set(2000_0000_0000n, now);
       expect(await vault.operator()).to.equal(ethers.ZeroAddress);
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.be.revertedWithCustomError(vault, 'NotOperator');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.be.revertedWithCustomError(vault, 'NotOperator');
       await vault.connect(rescue).setOperator(operator.address);
       await expect(vault.connect(operator).withdraw(usdc, U(1), operator.address)).to.be.revertedWithCustomError(vault, 'NotOwner');
-      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0)).to.emit(vault, 'Swapped');
+      await expect(vault.connect(operator).swap(usdc, weth, 500, U(100), 0, LATER)).to.emit(vault, 'Swapped');
     });
   });
 });

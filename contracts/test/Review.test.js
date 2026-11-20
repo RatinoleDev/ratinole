@@ -4,6 +4,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 const usd = (n) => ethers.parseUnits(String(n), 18);
 const U = (n) => ethers.parseUnits(String(n), 6);
@@ -36,7 +37,7 @@ describe('Review fixes (HEY Research Lab, 0e1396a)', function () {
       vault = await ethers.getContractAt('AgentVault', await factory.vaultOf(owner.address));
       expect(await vault.allowedTokens()).to.have.length(3);
       await cbbtc.mint(vault, 10n ** 8n);
-      await expect(vault.connect(operator).swap(cbbtc, usdc, 500, 10n ** 8n, 0)).to.be.revertedWithCustomError(vault, 'StaleOraclePrice');
+      await expect(vault.connect(operator).swap(cbbtc, usdc, 500, 10n ** 8n, 0, LATER)).to.be.revertedWithCustomError(vault, 'StaleOraclePrice');
       await expect(vault.priceUsd(cbbtc)).to.be.revertedWithCustomError(vault, 'StaleOraclePrice');
     });
 
@@ -55,7 +56,7 @@ describe('Review fixes (HEY Research Lab, 0e1396a)', function () {
       await factory.connect(owner).createVault(100, usd(10_000));
       vault = await ethers.getContractAt('AgentVault', await factory.vaultOf(owner.address));
       await weth.mint(vault, W(1));
-      await expect(vault.connect(operator).swap(weth, cbbtc, 500, W(1), 0)).to.be.revertedWithCustomError(vault, 'PairNotAllowed');
+      await expect(vault.connect(operator).swap(weth, cbbtc, 500, W(1), 0, LATER)).to.be.revertedWithCustomError(vault, 'PairNotAllowed');
     });
   });
 

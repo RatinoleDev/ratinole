@@ -35,7 +35,10 @@ export async function requireUser(deps: ApiDeps, req: FastifyRequest, reply: Fas
 
 /** Fixed-window rate limit. Returns true when the call is allowed. */
 export async function allow(redis: Redis, key: string, limit: number, windowSeconds: number): Promise<boolean> {
-  const n = await redis.incr(`rl:${key}`);
-  if (n === 1) await redis.expire(`rl:${key}`, windowSeconds);
+  const k = `rl:${key}`;
+  const n = await redis.incr(k);
+  // The window's end is set on the first count, and again whenever it is found missing: a command lost between
+  // the two must not leave a counter that never runs out and locks a wallet out for good.
+  if (n === 1 || (await redis.ttl(k)) < 0) await redis.expire(k, windowSeconds);
   return n <= limit;
 }

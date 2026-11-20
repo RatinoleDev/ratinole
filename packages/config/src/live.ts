@@ -34,6 +34,18 @@ export const LIVE = {
   betaMaxVaultUsd: 500,
   /** An order is only placed this soon after its hour. A later run records the decision without trading. */
   orderWindowMs: 20 * 60_000,
+  /**
+   * Every order carries a deadline this long after the order window closes, and the vault refuses it afterwards.
+   * A signed order can therefore never sit somewhere unsent and trade later: 25 minutes into its hour it is dead.
+   */
+  orderGraceMs: 5 * 60_000,
+  /** The smallest order the agent places, in dollars. Selling a whole position is always allowed, whatever its size. */
+  minOrderUsd: 1,
+  /**
+   * A position the agent has on record is still a position while it is worth at least this, in dollars. Below it
+   * there is nothing left that could be sold. Well under the smallest order, so the agent's own buys stay above it.
+   */
+  positionFloorUsd: 0.25,
   /** What the guard assumes a trade costs (pool fee plus typical price impact), in percent. */
   costPct: 0.1,
   /**
@@ -47,6 +59,22 @@ export const LIVE = {
   /** Hard bounds the vault contract accepts for slippage, in basis points. */
   slippageBps: { min: 10, max: 500 },
 } as const;
+
+/** The moment (unix seconds) after which the vault refuses an order placed for `hourMs`. */
+export const orderDeadline = (hourMs: number) => Math.floor((hourMs + LIVE.orderWindowMs + LIVE.orderGraceMs) / 1000);
+
+/**
+ * Do tokens the agent did not buy itself count as its position? Used when an agent starts, and whenever an agent
+ * with no position finds tokens in its vault. One rule, shared by the API and the engine.
+ *
+ * Anyone can send any vault a little of a token. If a little were enough to make an agent "in position", a
+ * stranger could stop it from ever buying for the price of a coffee. So the tokens only count when they are worth
+ * at least one of the plan's own orders: sending that much is a gift, not an attack. Smaller amounts are left
+ * alone, and become part of the position the next time the agent buys.
+ */
+export function strayTokensArePosition(tokenUsd: number, cashUsd: number, sizePctOfCash: number): boolean {
+  return tokenUsd >= Math.max(LIVE.minOrderUsd, (cashUsd * sizePctOfCash) / 100);
+}
 
 /** Whole units from raw token units. For display and decisions; orders always use the raw amount. */
 export function fromUnits(raw: bigint, decimals: number): number {
@@ -73,9 +101,10 @@ export type ParsedAmount =
  * A single comma is otherwise read as the decimal mark ("10,5" is ten and a half).
  */
 export function parseAmount(text: string, decimals: number): ParsedAmount {
-  const t = text.replace(/\s+/g, "");
+  // Only the ends are trimmed. A space between digits ("1 5") is not dropped: that would turn it into fifteen.
+  const t = text.trim();
   if (t === "") return { ok: false, error: null };
-  if (!/^[0-9.,]+$/.test(t)) return { ok: false, error: "Use digits only, like 100 or 0.5." };
+  if (!/^[0-9.,]+$/.test(t)) return { ok: false, error: /\s/.test(t) ? "Write the amount without spaces, like 1000.50." : "Use digits only, like 100 or 0.5." };
   const dots = t.split(".").length - 1;
   const commas = t.split(",").length - 1;
   let plain = t;

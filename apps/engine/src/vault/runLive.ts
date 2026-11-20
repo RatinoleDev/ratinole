@@ -9,7 +9,8 @@
  *  - An order that exists is always booked, whatever happened to the run that placed it.
  *  - The stored decision carries what really happened: the transaction, the real amounts, or why it failed.
  *  - Orders are only placed for the current hour, early in the hour. Hours missed while the engine was down are
- *    never traded after the fact.
+ *    never traded after the fact. Every order carries a deadline the vault itself enforces, so a signed order
+ *    cannot trade later than that either, whatever happens to it on the way.
  *  - One run at a time per agent.
  */
 import {
@@ -28,7 +29,7 @@ import {
   type PositionState,
   type StepOutput,
 } from "@rationale/brain";
-import { LIVE, LIVE_STABLE, LIVE_TOKENS, fromUnits, isMarketId, toUnits, type Address } from "@rationale/config";
+import { LIVE, LIVE_STABLE, LIVE_TOKENS, fromUnits, isMarketId, orderDeadline, strayTokensArePosition, toUnits, type Address } from "@rationale/config";
 import type { LiveOrder, Prisma } from "@rationale/db";
 import type { Hex } from "viem";
 import { log } from "../log";
@@ -39,14 +40,6 @@ import { OrderPendingError, type SwapOutcome, type SwapRequest, type VaultChain 
 
 /** A vault worth less than this is empty. */
 const EMPTY_USD = 1;
-/**
- * A token balance worth less than this is not a position: anyone can send a vault a speck of a token, and a speck
- * must not make the agent think it is invested. It grows with the vault so that it stays cheap to ignore and
- * costly to fake.
- */
-const dustUsd = (equity: number) => Math.max(0.25, equity * 0.002);
-/** The smallest order the agent places. Always well above the dust line, so its own buys never fall under it. */
-const minOrderUsd = (equity: number) => Math.max(1, equity * 0.005);
 /** Orders stay this far inside the vault's remaining daily limit: the vault values them with its own oracle. */
 const LIMIT_MARGIN = 0.98;
 /** A move of less than this between two decisions is rounding, not a deposit or a withdrawal. */
@@ -56,14 +49,27 @@ const FLOW_MIN_USD = 0.01;
  * is closed as "not sent", in case another worker is in the middle of signing it; closing it stops that worker.
  */
 const UNSENT_GRACE_MS = 3 * 60_000;
-/** A signed order the chain still does not know after this long counts as dropped. */
-const DROPPED_AFTER_MS = 15 * 60_000;
+/**
+ * A signed order the chain does not know is only written off once the chain's own clock is this many seconds past
+ * the order's deadline. From then on the vault refuses it, so "it never happened" is a fact, not a guess.
+ */
+const DEAD_MARGIN_S = 120;
 
 /** Another worker closed the order while this one was preparing it. Nothing was sent. */
 class OrderWithdrawnError extends Error {}
+/** The order was ready to send only after its window had closed. Nothing was sent. */
+class OrderLateError extends Error {}
+const LATE = `this run was late, and live orders are only placed in the first ${LIVE.orderWindowMs / 60_000} minutes of an hour`;
 
 const lower = (a: string) => a.toLowerCase() as Address;
-type Deps = EngineDeps & { chain: VaultChain };
+type Deps = EngineDeps & {
+  chain: VaultChain;
+  /**
+   * When an order placed for an hour stops being valid (unix seconds). Left out everywhere but in rehearsals on a
+   * copy of the chain, whose clock is today's while the hours being replayed are already over.
+   */
+  orderDeadline?: (hourMs: number) => number;
+};
 
 /** One run at a time per agent in this process, so two hours of the same agent can never overlap. */
 const turns = new Map<string, Promise<unknown>>();
@@ -81,16 +87,24 @@ function oneAtATime<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
  * Finish an order left open by an earlier attempt. A transaction's hash is always written down before it is sent,
  * so the hash alone says what happened. Throws OrderPendingError while that is not known yet.
  */
-async function settleOpenOrder(order: LiveOrder, chain: VaultChain, now: number): Promise<SwapOutcome> {
+async function settleOpenOrder(order: LiveOrder, chain: VaultChain, now: number, deadline: number): Promise<SwapOutcome> {
   const age = now - order.createdAt.getTime();
   if (!order.txHash) {
     if (age < UNSENT_GRACE_MS) throw new OrderPendingError("An order is still being prepared");
     return { ok: false, reason: "the order was not sent" };
   }
-  const known = await chain.outcomeOf(order.txHash as Hex, lower(order.vault));
+  const hash = order.txHash as Hex;
+  const known = await chain.outcomeOf(hash, lower(order.vault));
   if (known) return known;
-  if (age < DROPPED_AFTER_MS) throw new OrderPendingError(`Order ${order.txHash} is not confirmed yet`);
-  return { ok: false, reason: "the chain never confirmed the order", txHash: order.txHash as Hex };
+  // Not known to the chain. It may still be on its way, and until its deadline it could still trade. Only the
+  // chain's own clock can say that the deadline is behind us.
+  if ((await chain.chainTime()) <= deadline + DEAD_MARGIN_S) throw new OrderPendingError(`Order ${hash} is not confirmed yet`);
+  // Past its deadline: it can no longer trade. One more look, in case the first answer came from a node that was
+  // behind the others.
+  const again = await chain.outcomeOf(hash, lower(order.vault));
+  if (again) return again;
+  log("warn", "live order never confirmed", { agentId: order.agentId, orderId: order.id, txHash: hash });
+  return { ok: false, reason: "the chain never confirmed the order", txHash: hash };
 }
 
 /**
@@ -101,7 +115,7 @@ async function closeOrder(prisma: EngineDeps["prisma"], id: string, out: SwapOut
   const done = await prisma.liveOrder.updateMany({
     where: { id, status: "pending", ...(unsigned ? { txHash: null } : {}) },
     data: out.ok
-      ? { status: "done", txHash: out.txHash, amountOut: out.amountOut.toString(), error: null }
+      ? { status: "done", txHash: out.txHash, amountOut: out.amountOut.toString(), minedBlock: out.block.toString(), error: null }
       : { status: "failed", error: out.reason, ...(out.txHash ? { txHash: out.txHash } : {}) },
   });
   return done.count === 1;
@@ -121,6 +135,7 @@ export function runLiveAgentHour(agentId: string, hour: number, deps: Deps): Pro
 /** `booking`: this hour has an order from an earlier run that was never booked. It is booked even if the agent was paused since. */
 async function runHour(agentId: string, hour: number, deps: Deps, booking: boolean): Promise<AgentRunResult> {
   const { prisma, chain } = deps;
+  const deadlineOf = deps.orderDeadline ?? orderDeadline;
   const clock = () => (deps.now ?? Date.now)();
   const now = clock();
   const skip = (reason: string): AgentRunResult => ({ agentId, decided: 0, late: 0, skipped: true, reason });
@@ -129,20 +144,22 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   if (!first) return skip("not found");
   if (first.mode !== "live" || !first.vault) throw new Error(`Agent ${agentId} is not a live agent`);
   if (!booking) {
-    if (first.status !== "active") return skip(first.status);
-    if (first.owedFrom.getTime() > hour) return skip("not owed yet");
-    // An order from an earlier hour that never got its decision is booked first, oldest first, so its trade is
-    // on record and is never mistaken for a deposit or a withdrawal.
+    const active = first.status === "active";
+    // An order that never got its decision is booked first, oldest first, so its trade is on record and is never
+    // mistaken for a deposit or a withdrawal. For an agent its owner has paused or deleted since, that includes
+    // this hour's order: nothing new is placed for it, but what it already placed is real.
     for (let guard = 0; guard < 48; guard++) {
       const last = await prisma.decision.findFirst({ where: { agentId }, orderBy: { hour: "desc" }, select: { hour: true } });
       const unbooked = await prisma.liveOrder.findFirst({
-        where: { agentId, hour: { lt: new Date(hour), ...(last ? { gt: last.hour } : {}) } },
+        where: { agentId, hour: { ...(active ? { lt: new Date(hour) } : { lte: new Date(hour) }), ...(last ? { gt: last.hour } : {}) } },
         orderBy: { hour: "asc" },
       });
       if (!unbooked) break;
       const booked = await runHour(agentId, unbooked.hour.getTime(), deps, true);
       if (booked.decided === 0) throw new Error(`Agent ${agentId}: the order for ${unbooked.hour.toISOString()} could not be booked (${booked.reason ?? "unknown"})`);
     }
+    if (!active) return skip(first.status);
+    if (first.owedFrom.getTime() > hour) return skip("not owed yet");
   }
 
   const agent = await prisma.agent.findUnique({ where: { id: agentId }, include: { state: true, user: { select: { address: true } } } });
@@ -179,11 +196,12 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   let outcome: SwapOutcome | null = null;
   if (order) {
     if (order.status === "pending") {
-      outcome = await settleOpenOrder(order, chain, now);
+      outcome = await settleOpenOrder(order, chain, now, deadlineOf(order.hour.getTime()));
       // If another worker closed it in the meantime, its verdict stands: start this hour again from the record.
       if (!(await closeOrder(prisma, order.id, outcome, !order.txHash))) throw new OrderPendingError("The order was settled by another worker");
     } else if (order.status === "done" && order.txHash && order.amountOut) {
-      outcome = { ok: true, txHash: order.txHash as Hex, amountIn: BigInt(order.amountIn), amountOut: BigInt(order.amountOut), block: 0n };
+      // The block it landed in is kept with the order, so that this read, too, waits for a connection that has seen it.
+      outcome = { ok: true, txHash: order.txHash as Hex, amountIn: BigInt(order.amountIn), amountOut: BigInt(order.amountOut), block: BigInt(order.minedBlock ?? "0") };
     } else {
       outcome = { ok: false, reason: order.error ?? "the order failed", txHash: (order.txHash as Hex | null) ?? undefined };
     }
@@ -218,14 +236,25 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   if (tokenRaw < 0n) tokenRaw = 0n;
   const cash = fromUnits(stableRaw, LIVE_STABLE.decimals);
   const held = fromUnits(tokenRaw, token.decimals);
-  const dust = dustUsd(cash + held * mark);
-  const qty = held * mark < dust ? 0 : held;
+  const before = toState(stored);
+  // What counts as the agent's position:
+  //  - It has one on record: whatever of the token is in the vault now, unless so little is left that it could
+  //    not be sold. (The owner may have added to it or taken from it; that is a flow, below.)
+  //  - It has none on record: tokens in the vault are not its doing. They only count when they are worth one of
+  //    the plan's own orders. Anything less is left alone until the agent next buys, so nobody can stop an agent
+  //    from buying by sending its vault a few cents of the token.
+  const heldUsd = held * mark;
+  const qty = before.qty > 0 ? (heldUsd >= LIVE.positionFloorUsd ? held : 0) : strayTokensArePosition(heldUsd, cash, plan.sizePctOfCash) ? held : 0;
   const equityNow = cash + qty * mark;
-  if (equityNow < EMPTY_USD) return pause(prisma, agentId, "The vault is empty, so this agent was stopped. Deposit, then resume it.");
+  if (equityNow < EMPTY_USD && !order) {
+    // The vault was seen empty at this hour. Write that down: if the owner deposits and resumes later, the money
+    // that left is then valued as of now, not at whatever the price is on the day they come back.
+    await prisma.agentState.update({ where: { agentId }, data: { cash: 0, qty: 0, avgEntry: null, peak: null } });
+    return pause(prisma, agentId, "The vault is empty, so this agent was stopped. Deposit, then resume it.");
+  }
 
   // Deposits and withdrawals since the last decision. The agent's base (startingCash) moves with them the way a
   // fund issues and redeems units, so the return is never changed by money coming in or going out.
-  const before = toState(stored);
   const equityBefore = before.cash + before.qty * mark;
   const rawFlow = equityNow - equityBefore;
   const flowUsd = Math.abs(rawFlow) < FLOW_MIN_USD ? 0 : rawFlow;
@@ -270,31 +299,37 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     const still = await prisma.agent.findUnique({ where: { id: agentId }, select: { status: true } });
     if (still?.status !== "active") return skip(still?.status ?? "not found");
     const buying = want.fill.side === "buy";
-    const least = minOrderUsd(equityNow);
+    const least = LIVE.minOrderUsd;
     const room = snap.remainingUsd * LIMIT_MARGIN;
+    const limitUsedUp = "the vault's daily trading limit is used up";
     let amountIn = 0n;
     if (clock() - hour > LIVE.orderWindowMs) {
-      outcome = { ok: false, reason: `this run was late, and live orders are only placed in the first ${LIVE.orderWindowMs / 60_000} minutes of an hour` };
-    } else if (room < least) {
-      outcome = { ok: false, reason: "the vault's daily trading limit is used up" };
+      outcome = { ok: false, reason: LATE };
     } else if (buying) {
       const dollars = Math.min(want.fill.notional, room, fromUnits(snap.stable, LIVE_STABLE.decimals));
-      if (dollars < least) outcome = { ok: false, reason: `the order would be smaller than the ${usd(least)} minimum` };
+      if (room < least) outcome = { ok: false, reason: limitUsedUp };
+      else if (dollars < least) outcome = { ok: false, reason: `the order would be smaller than the ${usd(least)} minimum` };
       else {
         amountIn = toUnits(dollars, LIVE_STABLE.decimals);
         if (dollars < want.fill.notional - 0.01) note = "The vault's daily trading limit made this order smaller than planned.";
       }
     } else {
-      // A sale is the whole position, or as much of it as the vault's daily limit still allows.
+      // A sale is the whole position, whatever its size, or as much of it as the vault's daily limit still allows.
       const price = snap.priceUsd ?? mark;
       const value = fromUnits(snap.token, token.decimals) * price;
       if (value <= room) amountIn = snap.token;
       else {
-        const part = toUnits(room / price, token.decimals);
-        amountIn = part < snap.token ? part : snap.token;
-        note = "The vault's daily trading limit allowed only part of the position to be sold. The rest stays until the limit allows it.";
+        // Part of it. What stays behind must itself be big enough to sell later: a remainder too small to sell
+        // would sit in the vault for good.
+        const sellUsd = value - room < least ? value - least : room;
+        if (sellUsd < least) outcome = { ok: false, reason: limitUsedUp };
+        else {
+          const part = toUnits(sellUsd / price, token.decimals);
+          amountIn = part < snap.token ? part : snap.token;
+          note = "The vault's daily trading limit allowed only part of the position to be sold. The rest stays until the limit allows it.";
+        }
       }
-      if (amountIn <= 0n) outcome = { ok: false, reason: "there was nothing to trade" };
+      if (!outcome && amountIn <= 0n) outcome = { ok: false, reason: "there was nothing to trade" };
     }
     if (!outcome) {
       const req: SwapRequest = {
@@ -303,6 +338,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
         tokenOut: buying ? token.address : LIVE_STABLE.address,
         feeTier: snap.feeTier,
         amountIn,
+        deadline: deadlineOf(hour),
       };
       const fromBlock = await chain.blockNumber();
       order = await prisma.liveOrder.create({
@@ -312,6 +348,9 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
       const orderId = order.id;
       try {
         outcome = await chain.swap(req, async (txHash) => {
+          // Checking the order and waiting behind other orders takes time. One that is only ready after the
+          // window has closed is not sent. (The vault would refuse it a few minutes later in any case.)
+          if (clock() - hour > LIVE.orderWindowMs) throw new OrderLateError();
           // Only an order that is still open and has no transaction yet may be sent. If someone closed it as
           // "not sent" while this worker was slow, sending now would put a trade behind a failed record.
           const mine = await prisma.liveOrder.updateMany({ where: { id: orderId, status: "pending", txHash: null }, data: { txHash } });
@@ -319,7 +358,8 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
         });
       } catch (err) {
         if (err instanceof OrderPendingError) throw err;
-        if (err instanceof OrderWithdrawnError) {
+        if (err instanceof OrderLateError) outcome = { ok: false, reason: LATE };
+        else if (err instanceof OrderWithdrawnError) {
           const closed = await prisma.liveOrder.findUniqueOrThrow({ where: { id: orderId } });
           outcome = { ok: false, reason: closed.error ?? "the order was not sent" };
         } else {

@@ -6,7 +6,8 @@
 //
 // The owners are the wallets that must approve admin changes; the threshold is how many of them are needed.
 // One owner with a threshold of 1 works, but it is not a multisig: add a second signer as soon as you can.
-// The deployer only pays the fee and has no power over the Safe.
+// The deployer only pays the fee and has no power over the Safe. An owner must be a wallet held away from the
+// server: the deployer's own address is refused, and so is any address in SAFE_FORBIDDEN_OWNERS (the agent's key).
 const { ethers, network } = require('hardhat');
 
 const SAFE = {
@@ -31,6 +32,14 @@ async function main() {
 
   const [deployer] = await ethers.getSigners();
   if (!deployer) throw new Error('Set DEPLOYER_PRIVATE_KEY (it only pays the network fee)');
+  // The Safe will be the admin of the contracts. A key that sits on the server must not own it: the deployer key
+  // is thrown away after deploying, and whoever gets into the server must not get the admin with it.
+  const forbidden = [await deployer.getAddress(), ...(process.env.SAFE_FORBIDDEN_OWNERS || '').split(',').map((a) => a.trim()).filter(Boolean)];
+  for (const owner of owners) {
+    if (forbidden.some((f) => f.toLowerCase() === owner.toLowerCase())) {
+      throw new Error(`${owner} is a key that sits on this server (the deployer or the agent). Give a wallet you hold yourself, away from the server. Nothing was sent.`);
+    }
+  }
   const safeAbi = [
     'function setup(address[] owners,uint256 threshold,address to,bytes data,address fallbackHandler,address paymentToken,uint256 payment,address paymentReceiver)',
     'function getOwners() view returns (address[])',

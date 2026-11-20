@@ -8,6 +8,7 @@ const { ethers, network } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
 const netConfig = require('../scripts/netconfig');
 const { deployAll, DAY } = require('../scripts/lib/deploy');
+const LATER = 2n ** 62n; // a deadline far in the future: these tests are not about it
 
 const coder = ethers.AbiCoder.defaultAbiCoder();
 const leaf = (decisionId, agentId, hour, contentHash) =>
@@ -42,11 +43,11 @@ describe('Phase 3 rehearsal on a Robinhood Chain fork', function () {
     await weth.connect(owner).transfer(await vault.getAddress(), tenDollars);
     console.log(`      deposited ${ethers.formatEther(tenDollars)} WETH (~$10 at $${Number(ethers.formatUnits(ethPrice, 18)).toFixed(2)})`);
 
-    const sell = await (await vault.connect(operator).swap(T.WETH.address, T.USDG.address, T.WETH.feeTier, tenDollars, 0)).wait();
+    const sell = await (await vault.connect(operator).swap(T.WETH.address, T.USDG.address, T.WETH.feeTier, tenDollars, 0, LATER)).wait();
     const got = await usdg.balanceOf(await vault.getAddress());
     console.log(`      sold for ${ethers.formatUnits(got, await usdg.decimals())} USDG`);
     expect(got).to.be.gt(0n);
-    const buy = await (await vault.connect(operator).swap(T.USDG.address, T.WETH.address, T.WETH.feeTier, got, 0)).wait();
+    const buy = await (await vault.connect(operator).swap(T.USDG.address, T.WETH.address, T.WETH.feeTier, got, 0, LATER)).wait();
     console.log(`      bought back ${ethers.formatEther(await weth.balanceOf(await vault.getAddress()))} WETH`);
 
     // Record both decisions and verify them, as the engine and the site will. The registry only takes an hour

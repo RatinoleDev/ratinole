@@ -23,16 +23,19 @@ steps are in [go-live.md](go-live.md).
 | A new owner starts with the agent's access off; the agent's key can never be the recovery wallet | Done, tested |
 | Factory admin set at deployment (the timelock); `vaultOf` follows ownership and can never block an ownership change | Done, tested |
 | New vaults trade USDG, WETH and cbBTC only, fixed at deployment | Done, checked after deploying |
-| DecisionRegistry: one Merkle root per finished hour, never overwritable, verifiable by anyone | Done, tested |
+| Every swap carries a deadline the vault enforces: an order signed for one hour cannot trade later than 25 minutes into it | Done, tested |
+| The factory's list of vaults always follows an ownership change (the call asks for enough gas), and can never block one | Done, tested at every gas amount |
+| DecisionRegistry: one Merkle root per finished hour, posted within 14 days, never overwritable, verifiable by anyone | Done, tested |
 | RatinoleTimelock (OpenZeppelin TimelockController) run by the Safe | Done, tested |
 | Deploy script with post-deploy checks and a mainnet guard | Done, dry-run on a fork |
 | Rehearsal of the Phase 3 done bar on a Robinhood Chain fork | Passes: $10 vault, one sell and one buy through real pools, both decisions verified in the registry, a timelocked admin change, full withdrawal |
 
-Test counts: 75 unit tests, a 2,000-step fuzz test, and 11 fork tests (real
+Test counts: 80 unit tests, a 2,000-step fuzz test, and 11 fork tests (real
 Uniswap pools and Chainlink feeds on a local copy of the chain, fake money).
 
-An internal review of the whole real-money path (contracts, engine, API, website, owner's
-scripts) was done on 20 Nov 2026 and its findings fixed. It is not an independent audit.
+Two rounds of internal review of the whole real-money path (contracts, engine, API,
+website, owner's scripts) were done on 20 Nov 2026 and their findings fixed. They are
+not an independent audit.
 
 ## Live trading: built and rehearsed
 
@@ -82,6 +85,29 @@ per window, until the owner pauses the vault or revokes the operator (from NOUNY
 SECURITY.md). The windows are fixed, not rolling: around the end of one, up to twice
 the limit can trade within a short time, so the bound for a single day is twice that
 figure. The default daily limit for a new vault is $200.
+
+That bound holds while the price feeds keep up with the market, which is the normal
+case (Chainlink updates a feed when the price moves by its threshold). The vault
+accepts a feed's last answer for up to 25 hours (27 for USDG). If a feed stopped
+updating while the market moved, a stolen key could trade against the old price, and
+the loss per window could be as large as the daily limit times that move. The
+engine itself is not exposed to this: it adds its own minimum from the pool's price
+at the moment of the order, and a swap the vault's oracle disagrees with is refused.
+
+## What is known and not fixed
+
+- **No screen for handing a vault over or for a recovery wallet.** The contract
+  supports both; today they can only be used through the explorer. The Vault page
+  does show a recovery claim or a hand-over offer in progress, with a button to stop it.
+- **A wallet that receives a second vault** keeps its first one listed on the site.
+  The second is its property all the same; listing it means calling `listVault` on
+  the factory through the explorer.
+- **Tokens moved while the engine is down** (not paused: down) are valued at the
+  price of the hour the engine sees them. Dollars are always counted exactly.
+- **The API runs as the same server user as the engine.** It drops the keys from its
+  own process at start, but it could still read the `.env` file. A KMS is the fix.
+- **One engine process.** Two engines with the same operator key would fight over
+  transaction numbers. Nothing enforces "one" beyond the PM2 setup.
 
 ## Open decisions
 

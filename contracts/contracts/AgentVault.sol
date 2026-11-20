@@ -37,21 +37,25 @@ interface IVaultOwnerHook {
 
 /// @title AgentVault
 /// @notice Forked from NOUNY's AgentVault (MIT). Ratinole adds a two-step ownership transfer and an optional
-///         recovery wallet with a time delay (HANDOFF section 6.1); the swap path is unchanged.
+///         recovery wallet with a time delay (HANDOFF section 6.1), and gives every swap a deadline; the rest
+///         of the swap path is unchanged.
 /// @notice Non-custodial vault owned by a single user. The NOUNY agent (operator) may only swap
 ///         between tokens the owner allows, and swap output always returns to this vault.
 ///
 /// Guarantees for the owner:
 ///  - The operator can NEVER withdraw or send tokens out of the vault.
 ///  - The minimum output of every swap is computed on-chain from Chainlink oracles (not by the operator),
-///    so the operator cannot sell cheap / get sandwiched beyond `maxSlippageBps`.
+///    so the operator cannot sell cheap / get sandwiched beyond `maxSlippageBps` of the oracle's price. That
+///    price can lag the market: by the feed's update threshold in normal running, and by the whole move if a
+///    feed stops updating while its last answer is still inside `maxStaleness`.
 ///  - Total swap value is capped per 24-hour window (`dailyLimitUsd`). Windows are fixed, not rolling: around
 ///    the moment a window ends, up to twice the limit can trade within a short time.
 ///  - The owner can pause, replace/revoke the operator, and withdraw at any time, even while paused.
 ///  - Ownership moves only when the new owner accepts it within 7 days, or when the owner's chosen recovery
 ///    wallet claims it after a delay the owner set. Anything the owner does with the vault ends a recovery
 ///    claim in progress, and a claim that is ready but not completed within 30 days lapses.
-///  - A new owner starts with the agent's access switched off, and switches it on again themselves.
+///  - A new owner starts with the agent's access switched off, and switches it on again themselves. The token
+///    list, the feeds and the limits stay as the previous owner left them: check them before switching it on.
 contract AgentVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -71,6 +75,8 @@ contract AgentVault is ReentrancyGuard {
     uint32 public constant RECOVERY_CLAIM_WINDOW = 30 days;
     /// @notice How long a named new owner has to accept the vault.
     uint32 public constant TRANSFER_ACCEPT_WINDOW = 7 days;
+    /// @dev Gas handed to the factory when the owner changes: more than twice what its bookkeeping needs.
+    uint256 private constant OWNER_HOOK_GAS = 100_000;
 
     ISwapRouter02 public immutable router;
     /// @notice The factory that created this vault (told about owner changes), or the deployer.
@@ -136,6 +142,8 @@ contract AgentVault is ReentrancyGuard {
     error BadOperator();
     error TransferExpired(uint64 expiredAt);
     error RecoveryExpired(uint64 expiredAt);
+    error NotEnoughGas();
+    error OrderExpired(uint256 deadline);
 
     /// @dev The owner acting proves the owner's key is not lost, so a recovery claim in progress ends.
     modifier onlyOwner() {
@@ -197,7 +205,7 @@ contract AgentVault is ReentrancyGuard {
     /// @notice Change the operator. `address(0)` = fully revoke agent access. The recovery wallet cannot also be
     ///         the operator: the operator's key sits on a server, and must never be able to claim the vault.
     function setOperator(address newOperator) external onlyOwner {
-        if (newOperator != address(0) && newOperator == recovery) revert BadOperator();
+        if (newOperator != address(0) && (newOperator == recovery || newOperator == pendingOwner)) revert BadOperator();
         emit OperatorChanged(operator, newOperator);
         operator = newOperator;
     }
@@ -221,8 +229,9 @@ contract AgentVault is ReentrancyGuard {
     // ---------------------------------------------------------------- ownership and recovery
 
     /// @notice Start handing the vault to `next`, who must call `acceptOwnership` within 7 days.
-    ///         `address(0)` cancels.
+    ///         `address(0)` cancels. The agent's key can never be offered the vault.
     function transferOwnership(address next) external onlyOwner {
+        if (next != address(0) && next == operator) revert BadOperator();
         pendingOwner = next;
         pendingOwnerExpiresAt = next == address(0) ? 0 : uint64(block.timestamp) + TRANSFER_ACCEPT_WINDOW;
         emit OwnershipTransferStarted(owner, next);
@@ -274,12 +283,18 @@ contract AgentVault is ReentrancyGuard {
     ///        so a compromised operator cannot route through a thin or expensive pool.
     /// @param minOutFromOperator the operator's minimum; the contract uses the STRICTER of this
     ///        value and the oracle-based minimum.
-    function swap(address tokenIn, address tokenOut, uint24 feeTier, uint256 amountIn, uint256 minOutFromOperator)
-        external
-        nonReentrant
-        returns (uint256 amountOut)
-    {
+    /// @param deadline the order is refused after this time (unix seconds). A signed order can therefore never
+    ///        sit somewhere unsent and go through later, at a time nobody chose (Ratinole addition).
+    function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24 feeTier,
+        uint256 amountIn,
+        uint256 minOutFromOperator,
+        uint256 deadline
+    ) external nonReentrant returns (uint256 amountOut) {
         if (msg.sender != operator || operator == address(0)) revert NotOperator();
+        if (block.timestamp > deadline) revert OrderExpired(deadline);
         if (paused) revert Paused();
         if (tokenIn == tokenOut) revert SameToken();
         if (amountIn == 0) revert ZeroAmount();
@@ -348,13 +363,14 @@ contract AgentVault is ReentrancyGuard {
 
     // ---------------------------------------------------------------- internal
 
-    /// @dev A new owner starts clean: no pending transfer, no recovery wallet and no operator from the previous
-    ///      owner. The new owner switches the agent's access on again with `setOperator`.
+    /// @dev A new owner starts with no pending transfer, no recovery wallet and no operator from the previous
+    ///      owner, and switches the agent's access on again with `setOperator`. Tokens, feeds and limits are kept.
     function _setOwner(address next) internal {
         address previous = owner;
         owner = next;
         pendingOwner = address(0);
         pendingOwnerExpiresAt = 0;
+        if (recovery != address(0)) emit RecoverySet(address(0), 0);
         recovery = address(0);
         recoveryDelay = 0;
         recoveryReadyAt = 0;
@@ -363,10 +379,14 @@ contract AgentVault is ReentrancyGuard {
             operator = address(0);
         }
         emit OwnershipTransferred(previous, next);
-        // The factory's list of vaults is a convenience for the website. Whatever happens there, the ownership
-        // change stands: money must never be stuck behind a list.
+        // The factory's list of vaults is what the website reads. Two rules:
+        //  - whatever the factory does, the ownership change stands: money is never stuck behind a list;
+        //  - the list is never missed for lack of gas. A call only passes on 63/64 of the gas left, so without
+        //    this check a transaction sent with just enough gas for the vault would succeed with the list
+        //    left behind, and a gas estimate would land on exactly such an amount.
         if (factory.code.length > 0) {
-            try IVaultOwnerHook(factory).onOwnerChanged(previous, next) {} catch {}
+            if (gasleft() < (OWNER_HOOK_GAS * 64) / 63 + 5_000) revert NotEnoughGas();
+            try IVaultOwnerHook(factory).onOwnerChanged{gas: OWNER_HOOK_GAS}(previous, next) {} catch {}
         }
     }
 
@@ -403,7 +423,10 @@ contract AgentVault is ReentrancyGuard {
         if (answer <= 0) revert BadOraclePrice(token);
         if (updatedAt > block.timestamp || block.timestamp - updatedAt > c.maxStaleness) revert StaleOraclePrice(token);
         uint8 d = c.feed.decimals();
-        return d <= 18 ? uint256(answer) * 10 ** (18 - d) : uint256(answer) / 10 ** (d - 18);
+        uint256 p = d <= 18 ? uint256(answer) * 10 ** (18 - d) : uint256(answer) / 10 ** (d - 18);
+        // A feed with more than 18 decimals can round a small price down to nothing.
+        if (p == 0) revert BadOraclePrice(token);
+        return p;
     }
 
     function _consumeDaily(uint256 valueUsd) internal {

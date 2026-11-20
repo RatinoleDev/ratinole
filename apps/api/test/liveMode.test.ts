@@ -5,6 +5,7 @@ import { prisma, type Prisma } from "@rationale/db";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { VaultInfo, VaultReader } from "../src/chain";
+import { allow } from "../src/deps";
 import { env, makeApp, redis, signIn, wipe } from "./helpers";
 
 const hasDb = !!process.env.DATABASE_URL;
@@ -36,7 +37,7 @@ function pretendVaults(owner: string) {
   const state = {
     has: true,
     down: false,
-    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0 } as VaultInfo,
+    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0, otherUnpriced: false } as VaultInfo,
   };
   const reader: VaultReader = {
     factory: FACTORY,
@@ -68,7 +69,7 @@ describe.skipIf(!hasDb)("live mode", () => {
     const user = await prisma.user.findUniqueOrThrow({ where: { address: session.address } });
     const bt = await doneBacktest(user.id);
     const launch = (payload: Record<string, unknown> = {}) => app.inject({ method: "POST", url: "/api/agents", headers: { cookie: session.cookie }, payload: { backtestId: bt.id, mode: "live", ...payload } });
-    return { ...session, user, bt, launch, vault: vaults.state };
+    return { ...session, user, bt, launch, vault: vaults.state, reader: vaults.reader };
   }
 
   it("is off until a factory is configured, and says so", async () => {
@@ -177,7 +178,11 @@ describe.skipIf(!hasDb)("live mode", () => {
     s.vault.info.token.qty = 0.0001; // 20 cents
     expect((await s.launch()).json()).toMatchObject({ startingCash: 100, inPosition: false });
     await prisma.agent.deleteMany();
+    // No oracle price: while the launch limit is on, such a vault cannot be checked against it and is refused.
     s.vault.info.token = { qty: 1, tradable: true, priceUsd: null };
+    expect((await s.launch()).json()).toMatchObject({ error: "cap_unpriced" });
+    // With the limit lifted it starts, and the unpriced token is not counted as anything.
+    app = await makeApp({ vaults: s.reader, env: { ...env, liveMaxVaultUsd: null }, now: () => Date.UTC(2026, 10, 20, 10, 20) }).app;
     expect((await s.launch()).json()).toMatchObject({ startingCash: 100, inPosition: false });
   });
 
@@ -218,8 +223,11 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect((await app.inject({ method: "GET", url: `/api/agents/${live.id}`, headers: { cookie: s.cookie } })).json()).toMatchObject({ id: live.id, mode: "live", status: "active", vault: VAULT });
     expect((await app.inject({ method: "GET", url: `/api/agents/${live.id}/decisions`, headers: { cookie: s.cookie } })).statusCode).toBe(200);
     // The public lists never carry it.
-    for (const url of ["/api/public/leaderboard", "/api/public/feed"]) {
-      expect((await app.inject({ method: "GET", url })).body).not.toContain(live.id);
+    for (const url of ["/api/leaderboard", "/api/public/example", "/api/health"]) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode, url).toBe(200);
+      expect(res.body).not.toContain(live.id);
+      expect(res.body.toLowerCase()).not.toContain(VAULT);
     }
   });
 
@@ -258,6 +266,107 @@ describe.skipIf(!hasDb)("live mode", () => {
     const bt = await doneBacktest(user.id);
     const res = await app.inject({ method: "POST", url: "/api/agents", headers: { cookie: other.cookie }, payload: { backtestId: bt.id, mode: "live" } });
     expect(res.json()).toMatchObject({ error: "no_vault" });
+  });
+
+  it("tokens already in the vault are the starting position only when worth one of the plan's own orders", async () => {
+    // The plan trades 20% of cash: with $100 that is a $20 order.
+    const s = await withVault();
+    s.vault.info.token.qty = 0.005; // $10 of WETH: less than one order
+    expect((await s.launch()).json()).toMatchObject({ startingCash: 100, inPosition: false });
+    expect((await prisma.agentState.findFirstOrThrow()).qty).toBe(0);
+    await prisma.agent.deleteMany();
+    s.vault.info.token.qty = 0.0125; // $25: a position
+    expect((await s.launch()).json()).toMatchObject({ startingCash: 125, inPosition: true });
+    expect(await prisma.agentState.findFirstOrThrow()).toMatchObject({ qty: 0.0125, avgEntry: 2000 });
+  });
+
+  it("a vault whose only money is tokens too small to count is not enough to start on", async () => {
+    const s = await withVault();
+    s.vault.info.cash = 4;
+    s.vault.info.token.qty = 0.0004; // $0.80: with $4 cash the vault reads $4.80
+    expect((await s.launch()).json()).toMatchObject({ error: "vault_empty" });
+    expect(await prisma.agent.count()).toBe(0);
+  });
+
+  it("does not start under the launch limit on a vault it cannot fully value", async () => {
+    const s = await withVault();
+    s.vault.info.token = { qty: 100, tradable: true, priceUsd: null }; // 100 WETH, and the oracle has no price now
+    let res = await s.launch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "cap_unpriced" });
+    s.vault.info.token = { qty: 0, tradable: true, priceUsd: 2000 };
+    s.vault.info.otherUnpriced = true; // the same for a token of the other market
+    res = await s.launch();
+    expect(res.json()).toMatchObject({ error: "cap_unpriced" });
+    expect(await prisma.agent.count()).toBe(0);
+    s.vault.info.otherUnpriced = false;
+    expect((await s.launch()).statusCode).toBe(201);
+  });
+
+  it("a vault with no operator does not pass as 'access on', even if the factory names none", async () => {
+    const first = await makeApp().app;
+    const session = await signIn(first);
+    const vaults = pretendVaults(session.address);
+    vaults.state.info.operator = "0x0000000000000000000000000000000000000000";
+    app = await makeApp({ vaults: { ...vaults.reader, defaultOperator: async () => "0x0000000000000000000000000000000000000000" } }).app;
+    const user = await prisma.user.findUniqueOrThrow({ where: { address: session.address } });
+    const bt = await doneBacktest(user.id);
+    const res = await app.inject({ method: "POST", url: "/api/agents", headers: { cookie: session.cookie }, payload: { backtestId: bt.id, mode: "live" } });
+    expect(res.json()).toMatchObject({ error: "agent_access" });
+  });
+
+  it("resuming after tokens were moved starts measuring again from the vault as it is, at the same value per unit", async () => {
+    const s = await withVault();
+    s.vault.info.cash = 100;
+    s.vault.info.token.qty = 0.05; // $100 of WETH: a position
+    const { id } = (await s.launch()).json();
+    // One decision on record: the agent is up 10% (value per unit 1.1).
+    const h = Date.UTC(2026, 10, 20, 11);
+    await prisma.decision.create({
+      data: { agentId: id, hour: new Date(h), action: "hold", confidence: 50, regime: "ranging", evidence: [], guard: [], explanation: "Hold.", cashAfter: 100, qtyAfter: 0.05, markPrice: 2400, equityAfter: 220, holdingEquityAfter: 210, basisAfter: 200, candleSource: "binance:ETHUSDT", candleTime: new Date(h - HOUR_MS) },
+    });
+    await prisma.agentState.update({ where: { agentId: id }, data: { lastEquity: 220, peakEquity: 220 } });
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    const resume = () => app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } });
+
+    // While it was paused the owner took the WETH out. The price is now $3,000.
+    s.vault.info.token = { qty: 0, tradable: true, priceUsd: 3000 };
+    expect((await resume()).statusCode).toBe(200);
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    // $100 in the vault at 1.1 per unit: a base of about $90.91. The return shown stays +10%, not whatever the
+    // move to $3,000 would have made of tokens that were no longer there.
+    expect(agent.startingCash).toBeCloseTo(100 / 1.1, 6);
+    expect(agent.state).toMatchObject({ cash: 100, qty: 0, avgEntry: null, dayStartEquity: 100, lastEquity: 100 });
+    expect(agent.state!.peakEquity).toBeCloseTo(220 * (100 / 1.1 / 200), 6);
+    const dto = (await app.inject({ method: "GET", url: `/api/agents/${id}`, headers: { cookie: s.cookie } })).json();
+    expect(dto.returnPct).toBeCloseTo(10, 6);
+  });
+
+  it("resuming with the same tokens leaves the record alone: a pause is not a new start", async () => {
+    const s = await withVault();
+    s.vault.info.token.qty = 0.05;
+    const { id } = (await s.launch()).json();
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    const before = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    s.vault.info.cash = 250; // dollars came in; the engine counts those exactly when it next runs
+    s.vault.info.token.priceUsd = 3000;
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } })).statusCode).toBe(200);
+    const after = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    expect(after.startingCash).toBe(before.startingCash);
+    expect(after.state).toMatchObject({ cash: before.state!.cash, qty: 0.05, avgEntry: 2000 });
+  });
+
+  it("a rate limit counter that lost its end time gets one again, so nobody stays locked out", async () => {
+    await redis.set("rl:test:stuck", "40"); // no expiry: what a dropped command would leave behind
+    expect(await redis.ttl("rl:test:stuck")).toBe(-1);
+    expect(await allow(redis, "test:stuck", 12, 60)).toBe(false);
+    const ttl = await redis.ttl("rl:test:stuck");
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(60);
+    // The ordinary path still works.
+    expect(await allow(redis, "test:fresh", 2, 60)).toBe(true);
+    expect(await allow(redis, "test:fresh", 2, 60)).toBe(true);
+    expect(await allow(redis, "test:fresh", 2, 60)).toBe(false);
   });
 
   it("never adds virtual and real money together, and divides each hour by the base it had", async () => {

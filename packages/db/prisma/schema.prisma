@@ -163,6 +163,8 @@ model LiveOrder {
   fromBlock String
   txHash    String?
   amountOut String?
+  /// The block the order landed in. A later read of the vault waits for a connection that has seen this block.
+  minedBlock String?
   error     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

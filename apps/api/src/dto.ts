@@ -77,6 +77,9 @@ export function backtestDTO(b: Backtest): BacktestDTO {
   return dto;
 }
 
+/** The base a decision's value is measured against: the one stored with it, or the agent's own for older rows and paper agents. */
+const base = (a: Agent, d: Decision) => (d.basisAfter != null && d.basisAfter > 0 ? d.basisAfter : a.startingCash);
+
 export function agentDTO(a: Agent & { state: AgentState | null }, latest: Decision | null, decisions: number): AgentDTO {
   const plan = a.plan as unknown as Plan;
   const params = a.params as unknown as AgentParams;
@@ -98,8 +101,10 @@ export function agentDTO(a: Agent & { state: AgentState | null }, latest: Decisi
     launchedAt: a.launchedAt.toISOString(),
     startingCash: a.startingCash,
     equity: latest ? latest.equityAfter : null,
-    returnPct: latest && a.startingCash > 0 ? (latest.equityAfter / a.startingCash - 1) * 100 : null,
-    holdingPct: latest && a.startingCash > 0 ? (latest.holdingEquityAfter / a.startingCash - 1) * 100 : null,
+    // Each decision is measured against the base it was made on. For a live agent that base moves with deposits
+    // and withdrawals, and is stored with the decision: never divide an old value by a newer base.
+    returnPct: latest && base(a, latest) > 0 ? (latest.equityAfter / base(a, latest) - 1) * 100 : null,
+    holdingPct: latest && base(a, latest) > 0 ? (latest.holdingEquityAfter / base(a, latest) - 1) * 100 : null,
     inPosition: (a.state?.qty ?? 0) > 0,
     decisions,
     lastDecisionAt: latest ? latest.hour.toISOString() : null,

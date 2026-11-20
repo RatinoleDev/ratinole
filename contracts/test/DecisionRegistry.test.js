@@ -83,6 +83,21 @@ describe('DecisionRegistry', function () {
     expect(await reg.lastHour()).to.equal(hour);
   });
 
+  it('history cannot be filled in long afterwards: an hour that ended more than 14 days ago is refused', async () => {
+    const DAYS14 = 14n * 24n * BigInt(HOUR);
+    const old = hour - DAYS14 - 2n * BigInt(HOUR);
+    await expect(reg.connect(poster).post(old, id('rewritten'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+    await expect(reg.connect(poster).post(0, id('rewritten'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+    // The edge, to the second: an hour can be posted until 14 days after it ended, and not one second later.
+    const now = BigInt(await time.latest());
+    const edge = now - (now % BigInt(HOUR)) - DAYS14 + BigInt(HOUR); // its last moment is two hours from now
+    await time.setNextBlockTimestamp(edge + BigInt(HOUR) + DAYS14);
+    await expect(reg.connect(poster).post(edge, id('just in time'), 1)).to.emit(reg, 'RootPosted');
+    const next = edge + BigInt(HOUR);
+    await time.setNextBlockTimestamp(next + BigInt(HOUR) + DAYS14 + 1n);
+    await expect(reg.connect(poster).post(next, id('too late'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+  });
+
   it('only the poster posts; only the admin rotates the poster', async () => {
     await expect(reg.connect(stranger).post(hour, id('r'), 1)).to.be.revertedWithCustomError(reg, 'NotPoster');
     await expect(reg.connect(poster).setPoster(stranger.address)).to.be.revertedWithCustomError(reg, 'NotAdmin');

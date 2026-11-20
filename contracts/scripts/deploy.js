@@ -10,9 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ethers, network } = require('hardhat');
 const netConfig = require('./netconfig');
-const { deployAll, vaultTokens, DAY } = require('./lib/deploy');
-
-const SAFE_ABI = ['function getOwners() view returns (address[])', 'function getThreshold() view returns (uint256)'];
+const { deployAll, vaultTokens, refuseDevNode, readSafe, DAY } = require('./lib/deploy');
 
 async function main() {
   const live = network.name === 'robinhood';
@@ -24,6 +22,7 @@ async function main() {
   if (!deployer) throw new Error('No deployer: set DEPLOYER_PRIVATE_KEY in the environment.');
   const chainId = (await ethers.provider.getNetwork()).chainId;
   if (live && chainId !== 4663n) throw new Error(`Expected chain 4663, got ${chainId}`);
+  if (live) await refuseDevNode({ ethers, network });
 
   const safe = process.env.SAFE_ADDRESS;
   const operator = process.env.OPERATOR_ADDRESS;
@@ -43,18 +42,20 @@ async function main() {
 
   // The admin must be a Safe that exists on THIS chain: a Safe made on another network has no contract here,
   // and powers handed to an address nobody controls are gone for good.
-  const safeCode = await ethers.provider.getCode(safe);
+  const found = await readSafe({ ethers, safe }).catch((e) => {
+    throw new Error(`${e.message} Nothing was sent.`);
+  });
   let safeNote = 'not a contract (allowed off mainnet only)';
-  if (safeCode !== '0x') {
-    const s = new ethers.Contract(safe, SAFE_ABI, ethers.provider);
-    let owners, threshold;
-    try {
-      [owners, threshold] = [await s.getOwners(), Number(await s.getThreshold())];
-    } catch {
-      throw new Error(`The contract at ${safe} does not answer like a Safe. Nothing was sent.`);
+  if (found) {
+    // The Safe is the admin. A key that sits on the server (the deployer, the agent) must not be one of its
+    // owners: whoever gets into the server would get the admin too, and the deployer key is thrown away after.
+    const onServer = { 'the deployer': await deployer.getAddress(), 'the operator': operator, 'the poster': poster };
+    for (const [what, address] of Object.entries(onServer)) {
+      if (found.owners.some((o) => o.toLowerCase() === address.toLowerCase())) {
+        throw new Error(`${address} is ${what}'s address and also an owner of the Safe. The Safe's owners must be wallets held away from the server. Nothing was sent.`);
+      }
     }
-    if (!owners.length || threshold < 1 || threshold > owners.length) throw new Error(`The Safe at ${safe} has no usable owners. Nothing was sent.`);
-    safeNote = `${threshold} of ${owners.length} owners must approve: ${owners.join(', ')}`;
+    safeNote = `${found.threshold} of ${found.owners.length} owners must approve: ${found.owners.join(', ')}`;
   } else if (live) {
     throw new Error(`There is no contract at ${safe} on Robinhood Chain. Create the Safe on this chain first (scripts/create-safe.js). Nothing was sent.`);
   }
@@ -77,9 +78,13 @@ async function main() {
   };
   // The addresses reach the screen and the record as soon as the contracts exist, before any check: whatever
   // happens next, they are not lost. The record is marked verified only once every check has passed.
+  let deployed = false;
   const d = await deployAll({
     ethers, deployer, safe, operator, poster, delay, cfg,
+    // Each address is printed the moment its contract exists: if a later step fails, nothing already paid for is lost.
+    onStep: (name, address) => console.log(`  deployed ${name} at ${address}`),
     onDeployed: (a) => {
+      deployed = true;
       console.log(`\nDeployed (not checked yet):\n  timelock ${a.timelock}\n  factory  ${a.factory}\n  registry ${a.registry}`);
       try {
         save({ ...base, ...a, verified: false });
@@ -87,6 +92,11 @@ async function main() {
         console.log(`Could not write ${file} (${e.message}). Keep the addresses above.`);
       }
     },
+  }).catch((e) => {
+    if (!deployed) throw e;
+    // Deployed, but a check failed or could not be read (a node that is a moment behind is enough). Nothing is
+    // lost: the record is there, marked as not verified, and the checks can be run again.
+    throw new Error(`${e.message}\n\nThe contracts ARE deployed (addresses above), but they are not marked as verified.\nRun the checks again:  node scripts/go-live.mjs verify${live ? '' : ' --network localhost'}`);
   });
   save({ ...base, timelock: d.timelock, factory: d.factory, registry: d.registry, verified: true });
   console.log(`\nEvery check passed. Written to ${file}`);
