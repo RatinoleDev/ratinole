@@ -16,7 +16,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setText(t);
     setOn(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setOn(false), 2600);
+    // Longer messages stay up longer, so they can be read.
+    timer.current = setTimeout(() => setOn(false), Math.min(9000, 2600 + Math.max(0, t.length - 30) * 45));
   }, []);
   return (
     <ToastContext.Provider value={toast}>

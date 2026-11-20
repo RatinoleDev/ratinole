@@ -5,7 +5,7 @@
  * EIP-6963), then popular wallets that are not installed, with a link to install them or, on a phone, to open
  * this page inside the wallet's own app.
  */
-import { BRAND_NAME } from "@rationale/config";
+import { BRAND_NAME, CHAIN } from "@rationale/config";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Connector } from "wagmi";
 import { useConnect } from "wagmi";
@@ -67,6 +67,16 @@ export function WalletPicker({
           </button>
         </div>
         <p className="wpick-sub">Sign in with your wallet. Signing in does not move funds or approve anything.</p>
+        {stage ? (
+          <p className="wpick-step" role="status">
+            <b>Check {stage.name}.</b>{" "}
+            {stage.step === "network"
+              ? `Approve switching to ${CHAIN.name}, or adding it if your wallet asks. This does not move funds.`
+              : stage.step === "connect"
+                ? `Approve the connection. If your wallet shows another network first, accept it: the next step moves it to ${CHAIN.name}.`
+                : "Sign the message. It does not move funds or approve anything."}
+          </p>
+        ) : null}
 
         {detected.length > 0 ? (
           <>
@@ -83,7 +93,7 @@ export function WalletPicker({
                       {icon ? <img src={icon} alt="" width={36} height={36} /> : <span className="wpick-noicon" aria-hidden="true" />}
                       <span className="wpick-name">{name}</span>
                       <span className="wpick-tag">
-                        {busy ? (stage?.step === "sign" ? "Sign in your wallet…" : stage?.step === "network" ? "Adding Robinhood Chain…" : "Opening…") : "Detected"}
+                        {busy ? (stage?.step === "sign" ? "Sign the message…" : stage?.step === "network" ? `${CHAIN.name}…` : "Connecting…") : "Detected"}
                       </span>
                     </button>
                   </li>

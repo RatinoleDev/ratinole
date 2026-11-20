@@ -1,14 +1,14 @@
 "use client";
 
-import { BRAND_NAME } from "@rationale/config";
+import { BRAND_NAME, CHAIN } from "@rationale/config";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark, BrandWordmark } from "../Brand";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { shortAddress } from "../../lib/format";
 import { useToast } from "../Toast";
-import { useAccount, useSwitchChain } from "wagmi";
-import { robinhoodChain } from "../../lib/wagmi";
+import { useAccount } from "wagmi";
+import { ensureRobinhoodChain, type Eip1193 } from "../../lib/chain";
 import { useSession } from "./Session";
 
 const NAV = [
@@ -22,24 +22,28 @@ const NAV = [
 /** Pages reached from the wallet menu rather than the rail. */
 const HIDDEN = [{ href: "/app/settings", label: "Settings" }];
 
-/** Shown while the connected wallet is on another network: one click switches (and adds) Robinhood Chain. */
+/** Shown while the connected wallet is on another network: one click switches to Robinhood Chain, adding it if needed. */
 function NetworkSwitch() {
-  const { isConnected, chainId } = useAccount();
-  const { switchChain, isPending } = useSwitchChain();
+  const { isConnected, chainId, connector } = useAccount();
+  const [busy, setBusy] = useState(false);
   const toast = useToast();
-  if (!isConnected || chainId === undefined || chainId === robinhoodChain.id) return null;
+  if (!isConnected || !connector || chainId === undefined || chainId === CHAIN.id) return null;
+  const go = async () => {
+    setBusy(true);
+    try {
+      const provider = (await connector.getProvider()) as Eip1193;
+      const outcome = await ensureRobinhoodChain(provider);
+      if (outcome === "already" || outcome === "switched") connector.emitter.emit("change", { chainId: CHAIN.id });
+      else if (outcome === "unsupported") toast(`Your wallet did not switch. Add ${CHAIN.name} in your wallet, then try again.`);
+    } catch {
+      toast(`Your wallet did not switch. Add ${CHAIN.name} in your wallet, then try again.`);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <button
-      className="btn sm netswitch"
-      disabled={isPending}
-      onClick={() =>
-        switchChain(
-          { chainId: robinhoodChain.id },
-          { onError: () => toast(`Your wallet did not switch. Add ${robinhoodChain.name} in your wallet, then try again.`) },
-        )
-      }
-    >
-      {isPending ? "Check your wallet…" : `Switch to ${robinhoodChain.name}`}
+    <button className="btn sm netswitch" disabled={busy} onClick={() => void go()}>
+      {busy ? "Check your wallet…" : `Switch to ${CHAIN.name}`}
     </button>
   );
 }

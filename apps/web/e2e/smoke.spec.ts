@@ -269,12 +269,18 @@ test("wallet picker: popular wallets with logos when none is installed", async (
   await expect(dialog).toBeHidden();
 });
 
-/** A fake wallet that announces itself the standard way (EIP-6963), as MetaMask, Rabby and others do. It starts
- * on Ethereum and does not know Robinhood Chain until it is added. `refuseChain` makes it reject network changes. */
-async function fakeWallet(page: Page, opts: { name: string; refuseChain?: boolean }) {
-  await page.addInitScript(({ name, refuseChain }) => {
+type WalletCall = { method: string; params?: unknown[] };
+
+/**
+ * A fake wallet that announces itself the standard way (EIP-6963), as MetaMask, Bitget, Rabby and others do. It
+ * starts on Ethereum and does not know Robinhood Chain until it is added.
+ * `pre`: what it does with network requests from a site that is not connected yet: handle them ("allow"),
+ * refuse them ("unauthorized"), or never answer ("silent"). `refuseChain`: the user declines network changes.
+ */
+async function fakeWallet(page: Page, opts: { name: string; pre?: "allow" | "unauthorized" | "silent"; refuseChain?: boolean }) {
+  await page.addInitScript(({ name, pre = "allow", refuseChain }) => {
     const account = "0x7a3f00000000000000000000000000000000091c";
-    const calls: { method: string; params?: unknown }[] = [];
+    const calls: { method: string; params?: unknown[] }[] = [];
     (window as unknown as { __walletCalls: typeof calls }).__walletCalls = calls;
     let approved = false; // like a real wallet: no accounts until the user approves the site
     let chain = "0x1";
@@ -288,16 +294,14 @@ async function fakeWallet(page: Page, opts: { name: string; refuseChain?: boolea
         }
         if (method === "eth_accounts") return approved ? [account] : [];
         if (method === "eth_chainId") return chain;
-        if (method === "wallet_switchEthereumChain") {
+        if (method === "wallet_switchEthereumChain" || method === "wallet_addEthereumChain") {
+          if (!approved && pre === "unauthorized") throw Object.assign(new Error("The requested method has not been authorized by the user."), { code: 4100 });
+          if (!approved && pre === "silent") return new Promise(() => undefined);
           if (refuseChain) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
           const target = (params?.[0] as { chainId: string }).chainId;
-          if (target === "0x1237" && !knowsRobinhood) throw Object.assign(new Error("Unrecognized chain ID"), { code: 4902 });
-          chain = target;
-          return null;
-        }
-        if (method === "wallet_addEthereumChain") {
-          knowsRobinhood = true;
-          chain = (params?.[0] as { chainId: string }).chainId; // MetaMask switches after adding
+          if (method === "wallet_addEthereumChain") knowsRobinhood = true;
+          else if (target === "0x1237" && !knowsRobinhood) throw Object.assign(new Error("Unrecognized chain ID"), { code: 4902 });
+          chain = target; // like MetaMask, it switches after adding
           return null;
         }
         if (method === "personal_sign") return `0x${"ab".repeat(65)}`;
@@ -325,42 +329,85 @@ function signInMocks(onVerify: () => void) {
   };
 }
 
-test("wallet picker: an installed wallet appears with its logo, gets Robinhood Chain added, and signs in", async ({ page }) => {
-  await fakeWallet(page, { name: "Test Wallet" });
+/** Opens the picker, picks the wallet, waits for sign-in, and returns what the site asked the wallet, in order. */
+async function signInWithWallet(page: Page, name: string): Promise<string[]> {
   let verified = false;
   await mockApi(page, { signedIn: false, extra: signInMocks(() => (verified = true)) });
   await page.goto("/app/agents");
   await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
   const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
-  const row = dialog.getByRole("button", { name: /Test Wallet/ });
-  await expect(row).toBeVisible();
-  await expect(row.getByText("Detected")).toBeVisible();
-  expect(await row.locator("img").getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
-  await expect(dialog.getByText("Other wallets")).toBeVisible();
-  await row.click();
-  await expect(dialog).toBeHidden();
+  await dialog.getByRole("button", { name: new RegExp(name) }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
   expect(verified).toBe(true);
-  const calls = await page.evaluate(() => (window as unknown as { __walletCalls: { method: string; params?: unknown[] }[] }).__walletCalls);
-  const add = calls.find((c) => c.method === "wallet_addEthereumChain");
-  expect(add?.params?.[0]).toMatchObject({
-    chainId: "0x1237",
-    chainName: "Robinhood Chain",
-    rpcUrls: ["https://robinhood.drpc.org"],
-    blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
-    nativeCurrency: { symbol: "ETH", decimals: 18 },
-  });
-  // Network first, then the sign-in signature.
-  expect(calls.findIndex((c) => c.method === "wallet_addEthereumChain")).toBeLessThan(calls.findIndex((c) => c.method === "personal_sign"));
-});
+  const calls = await page.evaluate(() => (window as unknown as { __walletCalls: WalletCall[] }).__walletCalls);
+  return calls.map((c) => c.method);
+}
 
-test("wallet picker: a wallet that refuses Robinhood Chain still signs in and is told what to do", async ({ page }) => {
-  await fakeWallet(page, { name: "Picky Wallet", refuseChain: true });
-  let verified = false;
-  await mockApi(page, { signedIn: false, extra: signInMocks(() => (verified = true)) });
+const ROBINHOOD = {
+  chainId: "0x1237",
+  chainName: "Robinhood Chain",
+  rpcUrls: ["https://robinhood.drpc.org"],
+  blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
+  nativeCurrency: { symbol: "ETH", decimals: 18 },
+};
+
+test("wallet picker: an installed wallet shows its logo and is put on Robinhood Chain before it connects", async ({ page }) => {
+  await fakeWallet(page, { name: "Test Wallet" });
+  await mockApi(page, { signedIn: false });
   await page.goto("/app/agents");
   await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
-  await page.getByRole("dialog", { name: "Connect a wallet" }).getByRole("button", { name: /Picky Wallet/ }).click();
+  const row = page.getByRole("dialog", { name: "Connect a wallet" }).getByRole("button", { name: /Test Wallet/ });
+  await expect(row.getByText("Detected")).toBeVisible();
+  expect(await row.locator("img").getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+  await expect(page.getByText("Other wallets")).toBeVisible();
+
+  const methods = await signInWithWallet(page, "Test Wallet");
+  const calls = await page.evaluate(() => (window as unknown as { __walletCalls: WalletCall[] }).__walletCalls);
+  expect(calls.find((c) => c.method === "wallet_addEthereumChain")?.params?.[0]).toMatchObject(ROBINHOOD);
+  // The network is added before the wallet is asked to connect, and both come before the signature.
+  const add = methods.indexOf("wallet_addEthereumChain");
+  const connect = methods.indexOf("eth_requestAccounts");
+  expect(add).toBeGreaterThan(-1);
+  expect(add).toBeLessThan(connect);
+  expect(connect).toBeLessThan(methods.indexOf("personal_sign"));
+  // Already on Robinhood Chain: no "switch network" button in the header.
+  await expect(page.getByRole("button", { name: "Switch to Robinhood Chain" })).toHaveCount(0);
+});
+
+test("wallet picker: a wallet that only takes network requests once connected gets Robinhood Chain right after", async ({ page }) => {
+  await fakeWallet(page, { name: "Strict Wallet", pre: "unauthorized" });
+  const methods = await signInWithWallet(page, "Strict Wallet");
+  const connect = methods.indexOf("eth_requestAccounts");
+  const added = methods.lastIndexOf("wallet_addEthereumChain");
+  expect(added).toBeGreaterThan(connect);
+  expect(added).toBeLessThan(methods.indexOf("personal_sign"));
+  await expect(page.getByRole("button", { name: "Switch to Robinhood Chain" })).toHaveCount(0);
+});
+
+test("wallet picker: a wallet that ignores early network requests does not hang sign-in", async ({ page }) => {
+  await fakeWallet(page, { name: "Quiet Wallet", pre: "silent" });
+  const methods = await signInWithWallet(page, "Quiet Wallet");
+  expect(methods.lastIndexOf("wallet_addEthereumChain")).toBeGreaterThan(methods.indexOf("eth_requestAccounts"));
+  await expect(page.getByRole("button", { name: "Switch to Robinhood Chain" })).toHaveCount(0);
+});
+
+test("wallet picker: a wallet that refuses Robinhood Chain still signs in, is told what to do, and gets a switch button", async ({ page }) => {
+  await fakeWallet(page, { name: "Picky Wallet", refuseChain: true });
+  await signInWithWallet(page, "Picky Wallet");
   await expect(page.getByText(/Switch Picky Wallet to Robinhood Chain before trading/)).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Connect a wallet" })).toBeHidden();
-  expect(verified).toBe(true);
+  await expect(page.getByRole("button", { name: "Switch to Robinhood Chain" })).toBeVisible();
+});
+
+test("wallet picker: closing it while the wallet is waiting frees the buttons to try again", async ({ page }) => {
+  await fakeWallet(page, { name: "Quiet Wallet", pre: "silent" });
+  await mockApi(page, { signedIn: false });
+  await page.goto("/app/agents");
+  const connectButton = page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" });
+  await connectButton.click();
+  const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
+  await dialog.getByRole("button", { name: /Quiet Wallet/ }).click();
+  await expect(dialog.getByRole("status")).toContainText("Check Quiet Wallet.");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(connectButton).toBeEnabled();
 });
