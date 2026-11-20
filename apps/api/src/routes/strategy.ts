@@ -1,5 +1,5 @@
 /** Sentence -> plan (intake), and backtests of a confirmed plan. */
-import { checkPlan, describePlan, intake, planChecks, type IntakeOptions } from "@rationale/brain";
+import { checkPlan, describePlan, intake, planChecks, ruleDrafter, type IntakeOptions, type IntakeOutcome } from "@rationale/brain";
 import { MARKET_IDS, PAPER, RISK_DEFAULTS, marketLabel, type IntakeResponse } from "@rationale/config";
 import type { Prisma } from "@rationale/db";
 import type { FastifyInstance } from "fastify";
@@ -28,23 +28,25 @@ export function strategyRoutes(app: FastifyInstance, deps: ApiDeps) {
     const body = IntakeBody.safeParse(req.body);
     if (!body.success) return { ok: false, code: "rephrase", message: "Write your strategy as a sentence." };
 
-    const drafter = deps.drafterFor(user.id);
-    if (!drafter) return { ok: false, code: "llm_unavailable", message: "Reading strategies is switched off on this server: no language model is configured." };
     if (!(await allow(deps.redis, `intake:${user.id}`, 20, 3600))) {
       return { ok: false, code: "rate_limited", message: "That's a lot of strategies for one hour. Try again later." };
     }
-    if ((await monthSpendUsd(deps.prisma)) >= deps.env.llmMonthlyBudgetUsd) {
-      return { ok: false, code: "budget_exhausted", message: "Strategy reading has reached this month's budget. It resumes next month." };
-    }
 
+    // The language model reads the sentence when one is configured and within budget. Otherwise, or when the
+    // model cannot be reached, the built-in reader does: fixed rules, the same checks, no guessing.
     const opts = intakeOptions(user);
-    let outcome;
-    try {
-      outcome = await intake(body.data.sentence, drafter, opts);
-    } catch (err) {
-      req.log.warn({ err: String(err) }, "intake failed");
-      return { ok: false, code: "llm_unavailable", message: "Couldn't reach the strategy reader. Try again in a minute." };
+    const model = deps.drafterFor(user.id);
+    let outcome: IntakeOutcome | null = null;
+    let reader: "model" | "rules" = "rules";
+    if (model && (await monthSpendUsd(deps.prisma)) < deps.env.llmMonthlyBudgetUsd) {
+      try {
+        outcome = await intake(body.data.sentence, model, opts);
+        reader = "model";
+      } catch (err) {
+        req.log.warn({ err: String(err) }, "model intake failed; using the built-in reader");
+      }
     }
+    outcome ??= await intake(body.data.sentence, ruleDrafter, opts);
     if (!outcome.ok) return outcome;
     return {
       ok: true,
@@ -53,6 +55,7 @@ export function strategyRoutes(app: FastifyInstance, deps: ApiDeps) {
       checks: planChecks(outcome.plan, user.maxSizePct),
       notes: outcome.notes,
       notChecked: outcome.notChecked,
+      reader,
     };
   });
 

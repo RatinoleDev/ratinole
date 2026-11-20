@@ -124,11 +124,33 @@ describe.skipIf(!hasDb)("api", () => {
       expect((await app.inject({ method: "POST", url: "/api/intake", payload: { sentence: "Buy ETH" } })).statusCode).toBe(401);
     });
 
-    it("says plainly when no language model is configured", async () => {
+    it("reads the sentence with the built-in reader when no language model is configured", async () => {
       app = await makeApp().app;
       const { cookie } = await signIn(app);
-      const res = await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30" } });
-      expect(res.json()).toMatchObject({ ok: false, code: "llm_unavailable" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/intake",
+        headers: { cookie },
+        payload: { sentence: "Buy ETH when RSI drops below 30 in an uptrend, skip if there is bad news, take profit at 8% and stop at 4%, use 25% per trade" },
+      });
+      const body = res.json();
+      expect(body).toMatchObject({ ok: true, reader: "rules" });
+      expect(body.plan).toMatchObject({
+        markets: ["ETH"],
+        kind: "entry_exit",
+        entry: [
+          { signal: "rsi", op: "<", value: 30 },
+          { signal: "trend_pct", op: ">", value: 0 },
+        ],
+        exit: { takeProfitPct: 8, stopLossPct: 4 },
+        filters: ["negative_news"],
+        sizePctOfCash: 25,
+      });
+      expect(body.notChecked[0]).toMatch(/headlines/);
+      // What it cannot read is refused with the part named, not dropped.
+      const odd = await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI is below 30 and MACD crosses up, stop 5%" } });
+      expect(odd.json()).toMatchObject({ ok: false, code: "rephrase" });
+      expect(odd.json().message).toContain("macd crosses up");
     });
 
     it("returns the plan, rows, checks and notes from a valid draft", async () => {
@@ -143,13 +165,14 @@ describe.skipIf(!hasDb)("api", () => {
       const res = await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: " Buy ETH when RSI drops below 30 in an uptrend " } });
       const body = res.json();
       expect(body.ok).toBe(true);
+      expect(body.reader).toBe("model");
       expect(sentences).toEqual(["Buy ETH when RSI drops below 30 in an uptrend"]);
       expect(body.rows[0]).toEqual({ label: "Market", lines: ["ETH / USDG"] });
       expect(body.checks.map((c: { pass: boolean }) => c.pass)).toEqual([true, true, true, true]);
       expect(body.notChecked[0]).toMatch(/headlines/);
     });
 
-    it("passes on intake refusals and LLM failures without guessing", async () => {
+    it("passes on the model's refusals, and falls back to the built-in reader when the model cannot be reached", async () => {
       app = await makeApp({ drafterFor: () => async () => validDraft({ sizePctOfCash: 80 }) }).app;
       let { cookie } = await signIn(app);
       expect((await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH with 80% per trade" } })).json()).toMatchObject({ ok: false, code: "size_over_cap" });
@@ -160,14 +183,26 @@ describe.skipIf(!hasDb)("api", () => {
         },
       }).app;
       ({ cookie } = await signIn(app));
-      expect((await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30" } })).json()).toMatchObject({ ok: false, code: "llm_unavailable" });
+      expect((await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30, stop 5%" } })).json()).toMatchObject({
+        ok: true,
+        reader: "rules",
+        plan: { entry: [{ signal: "rsi", op: "<", value: 30 }], exit: { stopLossPct: 5 } },
+      });
     });
 
-    it("stops at the monthly budget", async () => {
-      app = await makeApp({ drafterFor: () => async () => validDraft() }).app;
+    it("stops calling the model at the monthly budget and uses the built-in reader", async () => {
+      let called = false;
+      app = await makeApp({
+        drafterFor: () => async () => {
+          called = true;
+          return validDraft();
+        },
+      }).app;
       const { cookie } = await signIn(app);
       await prisma.llmUsage.create({ data: { model: "claude-opus-5-5", purpose: "intake", inputTokens: 1, outputTokens: 1, costUsd: 25, ok: true } });
-      expect((await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30" } })).json()).toMatchObject({ ok: false, code: "budget_exhausted" });
+      const res = await app.inject({ method: "POST", url: "/api/intake", headers: { cookie }, payload: { sentence: "Buy ETH when RSI drops below 30, stop 5%" } });
+      expect(res.json()).toMatchObject({ ok: true, reader: "rules" });
+      expect(called).toBe(false);
     });
   });
 

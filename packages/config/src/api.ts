@@ -44,6 +44,8 @@ export type IntakeResponse =
       notes: string[];
       /** Parts of the plan that cannot be checked yet, e.g. the news filter. */
       notChecked: string[];
+      /** What read the sentence: the language model, or the built-in reader with fixed rules. */
+      reader: "model" | "rules";
     }
   | { ok: false; code: IntakeErrorCode; message: string };
 

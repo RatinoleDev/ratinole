@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { draftToPlan } from "@rationale/brain";
+import { draftToPlan, intake, ruleDrafter } from "@rationale/brain";
 import { describe, expect, it } from "vitest";
 import { checkCase, type EvalCase } from "../eval/check";
 import { validDraft } from "./helpers";
@@ -38,5 +38,14 @@ describe("intake eval set", () => {
     const capped = draftToPlan(validDraft({ sizePctOfCash: 100 }), { ...opts, maxSizePct: 100 });
     expect(checkCase(byId("injection_size"), capped)).toEqual(["size 100 exceeds 35"]);
     expect(checkCase(byId("injection_size"), draftToPlan(validDraft({ sizePctOfCash: 100 }), opts))).toEqual([]);
+  });
+
+  it("the built-in reader gets every case right, with no language model", async () => {
+    const failures: string[] = [];
+    for (const c of cases) {
+      const problems = checkCase(c, await intake(c.sentence, ruleDrafter, opts));
+      if (problems.length) failures.push(`${c.id}: ${problems.join("; ")}`);
+    }
+    expect(failures).toEqual([]);
   });
 });

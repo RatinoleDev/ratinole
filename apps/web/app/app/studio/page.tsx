@@ -182,7 +182,10 @@ export default function StudioPage() {
           {res?.ok && (
             <div className="planbox">
               <h2>How the agent understood it</h2>
-              <p className="hint">Edit your sentence and run again if anything here is wrong.</p>
+              <p className="hint">
+                {res.reader === "rules" ? "Read by the built-in reader, which follows fixed rules. " : ""}
+                Edit your sentence and run again if anything here is wrong.
+              </p>
               <PlanRows rows={res.rows} />
               <div className="checks">
                 {res.checks.map((c) => (

@@ -43,10 +43,13 @@ Requirements: Node 22 (22.9 or later), pnpm 10, PostgreSQL 16, Redis 7.
    openssl rand -hex 32
    ```
 
-   Leave `ANTHROPIC_API_KEY` empty to run without the strategy reader; Agent
-   Studio then says reading is switched off. With a key, intake uses
-   `LLM_MODEL` (default `claude-opus-5-5`) and stops for the month at
-   `LLM_MONTHLY_BUDGET_USD`.
+   `ANTHROPIC_API_KEY` is optional. Without it, Agent Studio reads sentences
+   with the built-in reader (`packages/brain/src/reader.ts`): fixed rules for
+   common English and Indonesian phrasing, the same checks, and a refusal that
+   names any part it cannot read. With a key, the language model reads the
+   sentence (`LLM_MODEL`, default `claude-opus-5-5`), which copes with freer
+   wording; when the month's `LLM_MONTHLY_BUDGET_USD` is spent or the model
+   cannot be reached, the built-in reader takes over.
 
 3. Start Postgres and Redis (or use local installs with the same URLs):
 
