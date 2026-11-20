@@ -12,7 +12,7 @@ import { generatePrivateKey } from "viem/accounts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { OrderPendingError, refusalReason, viemVaultChain, withoutUrls, type SwapOutcome, type VaultChain } from "../src/vault/chain";
 
-type Reply = { result: unknown } | { error: { code: number; message: string; data?: unknown } };
+type Reply = { result: unknown } | { error: { code: number; message: string; data?: unknown } } | { http: number; body: string };
 type Handler = (params: unknown[]) => Reply;
 
 const VAULT = "0x3333333333333333333333333333333333333333" as Address;
@@ -36,6 +36,12 @@ class PretendNode {
         const { id, method, params } = JSON.parse(body) as { id: number; method: string; params: unknown[] };
         this.asked.push(method);
         const reply = (this.handlers.get(method) ?? (() => fail(-32601, `method ${method} is not mocked`)))(params ?? []);
+        if ("http" in reply) {
+          // A gateway in front of the node answering with an error page of its own.
+          res.statusCode = reply.http;
+          res.end(reply.body);
+          return;
+        }
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ jsonrpc: "2.0", id, ...reply }));
       });
@@ -117,6 +123,30 @@ describe("the chain client reads a node's answers correctly", () => {
       expect(sent()).toBe(false);
     }
     expect(signed).toHaveLength(0);
+  });
+
+  it("a sentence in a node's own error, or a gateway's error page, is never read as the chain's answer", async () => {
+    // Some nodes put a sentence where revert data would be. It is not hex, so it is not a revert.
+    node.handlers.set("eth_call", () => fail(-32603, "Internal error", "upstream connect error or disconnect/reset before headers"));
+    let out: unknown = await buy().catch((e: unknown) => e);
+    expect(out).toBeInstanceOf(Error);
+    expect(out).not.toBeInstanceOf(OrderPendingError);
+    expect(sent()).toBe(false);
+
+    // A gateway's 503 whose page happens to contain words a real refusal would use.
+    node.healthy();
+    node.handlers.set("eth_estimateGas", () => ({ http: 503, body: "service unavailable: fee cap exceeded, transaction underpriced" }));
+    out = await buy().catch((e: unknown) => e);
+    expect(out).toBeInstanceOf(Error);
+    expect(out).not.toBeInstanceOf(OrderPendingError);
+    expect(sent()).toBe(false);
+
+    // The same page when the signed order is being sent: the chain may have it. Not known yet, never "refused".
+    node.healthy();
+    signed = [];
+    node.handlers.set("eth_sendRawTransaction", () => ({ http: 503, body: "insufficient funds; fee cap exceeded" }));
+    await expect(buy()).rejects.toBeInstanceOf(OrderPendingError);
+    expect(signed).toHaveLength(1);
   });
 
   it("says so when the agent's own wallet cannot pay the network fee", async () => {

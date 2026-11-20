@@ -300,6 +300,8 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect(res.json()).toMatchObject({ error: "cap_unpriced" });
     expect(await prisma.agent.count()).toBe(0);
     s.vault.info.otherUnpriced = false;
+    // A speck without a price is nothing: one unit of a token sent by anyone must not stand in the owner's way.
+    s.vault.info.token = { qty: 0.0000000001, tradable: true, priceUsd: null };
     expect((await s.launch()).statusCode).toBe(201);
   });
 
@@ -315,7 +317,7 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect(res.json()).toMatchObject({ error: "agent_access" });
   });
 
-  it("resuming after tokens were moved starts measuring again from the vault as it is, at the same value per unit", async () => {
+  it("tokens taken out while the agent was stopped leave its record at the price of its last decision", async () => {
     const s = await withVault();
     s.vault.info.cash = 100;
     s.vault.info.token.qty = 0.05; // $100 of WETH: a position
@@ -333,13 +335,70 @@ describe.skipIf(!hasDb)("live mode", () => {
     s.vault.info.token = { qty: 0, tradable: true, priceUsd: 3000 };
     expect((await resume()).statusCode).toBe(200);
     const agent = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
-    // $100 in the vault at 1.1 per unit: a base of about $90.91. The return shown stays +10%, not whatever the
-    // move to $3,000 would have made of tokens that were no longer there.
+    // The WETH is taken off the record at $2,400, the price of the last decision: $120 of the $220. What is left
+    // is $100 at 1.1 per unit, a base of about $90.91. The return shown stays +10%, not whatever the move to
+    // $3,000 would have made of tokens that were no longer there.
     expect(agent.startingCash).toBeCloseTo(100 / 1.1, 6);
-    expect(agent.state).toMatchObject({ cash: 100, qty: 0, avgEntry: null, dayStartEquity: 100, lastEquity: 100 });
+    expect(agent.state).toMatchObject({ cash: 100, qty: 0, avgEntry: null, lastEquity: 100 });
+    expect(agent.state!.dayStartEquity).toBeCloseTo(200 * (100 / 220), 6);
     expect(agent.state!.peakEquity).toBeCloseTo(220 * (100 / 1.1 / 200), 6);
     const dto = (await app.inject({ method: "GET", url: `/api/agents/${id}`, headers: { cookie: s.cookie } })).json();
     expect(dto.returnPct).toBeCloseTo(10, 6);
+  });
+
+  it("part of the position taken out: what is left keeps its entry price and its stop", async () => {
+    const s = await withVault();
+    s.vault.info.cash = 100;
+    s.vault.info.token.qty = 0.05;
+    const { id } = (await s.launch()).json();
+    const h = Date.UTC(2026, 10, 20, 11);
+    await prisma.decision.create({
+      data: { agentId: id, hour: new Date(h), action: "hold", confidence: 50, regime: "ranging", evidence: [], guard: [], explanation: "Hold.", cashAfter: 100, qtyAfter: 0.05, markPrice: 2400, equityAfter: 220, holdingEquityAfter: 210, basisAfter: 200, candleSource: "binance:ETHUSDT", candleTime: new Date(h - HOUR_MS) },
+    });
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    s.vault.info.token = { qty: 0.03, tradable: true, priceUsd: 1800 }; // 0.02 WETH taken out; the price has fallen
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } })).statusCode).toBe(200);
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    // 0.02 WETH at $2,400 is $48 of the $220: the base shrinks in that proportion and nothing else moves.
+    expect(agent.startingCash).toBeCloseTo(200 * (172 / 220), 6);
+    expect(agent.state).toMatchObject({ cash: 100, qty: 0.03, avgEntry: 2000, peak: 2000 });
+  });
+
+  it("a few cents sent to the vault while the agent was stopped change nothing at all", async () => {
+    const s = await withVault();
+    s.vault.info.token.qty = 0.05;
+    const { id } = (await s.launch()).json();
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    const before = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    // The price has fallen 16%, and a stranger sends 30 cents of WETH. The agent's entry price, and with it its
+    // stop, must stay where they were, and the loss over the pause must stay on the record.
+    s.vault.info.token = { qty: 0.05 + 0.3 / 1680, tradable: true, priceUsd: 1680 };
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } })).statusCode).toBe(200);
+    const after = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    expect(after.startingCash).toBe(before.startingCash);
+    expect(after.state).toMatchObject({ cash: before.state!.cash, qty: 0.05, avgEntry: 2000, peak: 2000, dayStartEquity: before.state!.dayStartEquity });
+    expect(after.state!.dayStart.getTime()).toBe(before.state!.dayStart.getTime());
+  });
+
+  it("an agent does not resume while one of its orders is still unbooked", async () => {
+    const s = await withVault();
+    const { id } = (await s.launch()).json();
+    const hour = new Date(Date.UTC(2026, 10, 20, 10));
+    await prisma.liveOrder.create({ data: { agentId: id, hour, side: "sell", vault: VAULT, tokenIn: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", tokenOut: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", amountIn: "1", fromBlock: "1", txHash: `0x${"7".repeat(64)}` } });
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    const before = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    const resume = () => app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } });
+    const res = await resume();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "order_pending" });
+    const after = await prisma.agent.findUniqueOrThrow({ where: { id }, include: { state: true } });
+    expect(after).toMatchObject({ status: "paused", startingCash: before.startingCash });
+    expect(after.state).toMatchObject({ cash: before.state!.cash, qty: before.state!.qty });
+    // Once the engine has written the order down, it resumes.
+    await prisma.decision.create({
+      data: { agentId: id, hour, action: "sell", confidence: 50, regime: "ranging", evidence: [], guard: [], explanation: "Sell.", cashAfter: 100, qtyAfter: 0, markPrice: 2000, equityAfter: 100, holdingEquityAfter: 100, basisAfter: 100, candleSource: "binance:ETHUSDT", candleTime: new Date(hour.getTime() - HOUR_MS) },
+    });
+    expect((await resume()).statusCode).toBe(200);
   });
 
   it("resuming with the same tokens leaves the record alone: a pause is not a new start", async () => {

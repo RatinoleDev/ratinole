@@ -3,7 +3,7 @@
  * resumed. The API holds no key and never sends a transaction: users sign their own vault actions in their
  * wallet, and the engine signs the agent's swaps.
  */
-import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE_STABLE, LIVE_TOKENS, VAULT_ABI, fromUnits, type Address, type MarketId } from "@rationale/config";
+import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE_STABLE, LIVE_TOKENS, VAULT_ABI, couldBeWorthADollar, fromUnits, type Address, type MarketId } from "@rationale/config";
 import { createPublicClient, defineChain, http, zeroAddress, type Abi } from "viem";
 
 export interface VaultInfo {
@@ -110,7 +110,9 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
         const bal = must<bigint>(8 + 2 * k);
         const px = may<bigint>(9 + 2 * k);
         if (px != null) otherUsd += fromUnits(bal, t.decimals) * fromUnits(px, 18);
-        else if (bal > 0n) otherUnpriced = true;
+        // A speck without a price is nothing. Anyone can send a vault one unit of a token, and that must not
+        // stand in the way of its owner.
+        else if (couldBeWorthADollar(fromUnits(bal, t.decimals))) otherUnpriced = true;
       });
       const price = may<bigint>(7);
       return {

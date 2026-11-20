@@ -110,14 +110,18 @@ function contractRevert(err: unknown): Revert | null {
   const said = rpc?.details ?? "";
   const text = `${dressed?.reason ?? ""} ${said} ${err.shortMessage}`;
   if (dressed?.data?.errorName) return { errorName: dressed.data.errorName, text };
-  if (dressed?.raw && dressed.raw !== "0x") return { text };
+  // Revert data is hex. Some nodes put a sentence in the same field of their own error; that is not a revert.
+  if (dressed?.raw && /^0x[0-9a-fA-F]{8,}$/.test(dressed.raw)) return { text };
   if (rpc?.code === 3 || /execution reverted/i.test(said)) return { text };
   if (!rpc && err.walk((e) => e instanceof ExecutionRevertedError)) return { text };
   return null;
 }
 
-/** Everything the node said in an error, for matching its wording. */
-const nodeWords = (err: BaseError) => `${err.shortMessage} ${err.details ?? ""} ${(err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null)?.details ?? ""}`;
+/**
+ * What the node itself said in its JSON-RPC error, for matching its wording. Nothing else is looked at: the text
+ * of a gateway's error page (an HTTP 502 or 503) proves nothing about what the chain did with a transaction.
+ */
+const nodeWords = (err: BaseError) => (err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null)?.details ?? "";
 const NO_GAS_MONEY = /insufficient funds|insufficient balance|gas required exceeds allowance/i;
 
 /**
@@ -126,6 +130,8 @@ const NO_GAS_MONEY = /insufficient funds|insufficient balance|gas required excee
  */
 function refusedOutright(err: unknown): boolean {
   if (!(err instanceof BaseError)) return false;
+  // Only the node's own JSON-RPC answer counts as a refusal.
+  if (!err.walk((e) => e instanceof RpcRequestError)) return false;
   if (err.walk((e) => e instanceof InsufficientFundsError)) return true;
   return new RegExp(`${NO_GAS_MONEY.source}|intrinsic gas|exceeds block gas limit|underpriced|fee cap|max fee per gas`, "i").test(nodeWords(err));
 }

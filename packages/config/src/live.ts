@@ -76,6 +76,13 @@ export function strayTokensArePosition(tokenUsd: number, cashUsd: number, sizePc
   return tokenUsd >= Math.max(LIVE.minOrderUsd, (cashUsd * sizePctOfCash) / 100);
 }
 
+/**
+ * Could this much of a token be worth a dollar, when no price is known for it? Judged at a million dollars a
+ * token, far above anything traded here, so that only true specks pass as nothing. Used where a balance without
+ * a price must either be counted or ignored.
+ */
+export const couldBeWorthADollar = (qty: number) => qty * 1_000_000 >= 1;
+
 /** Whole units from raw token units. For display and decisions; orders always use the raw amount. */
 export function fromUnits(raw: bigint, decimals: number): number {
   const base = 10n ** BigInt(decimals);

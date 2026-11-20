@@ -1,6 +1,6 @@
 /** Agents, paper and live: launch, list, pause/resume, decision log, and the wallet overview. */
 import { HOUR_MS, maxDrawdownPct, type Plan } from "@rationale/brain";
-import { LIVE, LIVE_TOKENS, PAPER, isMarketId, strayTokensArePosition, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
+import { LIVE, LIVE_TOKENS, PAPER, couldBeWorthADollar, isMarketId, strayTokensArePosition, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
 import type { Prisma, User } from "@rationale/db";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -82,7 +82,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (launching && cap != null) {
       // The cap is a statement about how much is at stake. A balance the oracle cannot price right now makes that
       // unknown, and unknown is not "under the cap".
-      if ((price == null && info.token.qty > 0) || info.otherUnpriced) {
+      if ((price == null && couldBeWorthADollar(info.token.qty)) || info.otherUnpriced) {
         return no(409, "cap_unpriced", "Your vault holds a token the price oracle has no fresh price for right now, so its value cannot be checked against the launch limit. Try again in a moment.");
       }
       if (total > cap) {
@@ -93,36 +93,39 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   }
 
   /**
-   * While an agent is stopped nobody watches its vault. Dollars that came or went are counted exactly whenever
-   * they are seen. Tokens are different: if the owner took the agent's ETH out last week, valuing that at today's
-   * price would book a week of the market's moves as the agent's doing. So when the token balance is not the one
-   * the agent left, measuring starts again from the vault as it is now, and the return carries on from where it
-   * stood when the agent stopped.
+   * While an agent is stopped nobody watches its vault. Most of what can happen meanwhile needs nothing here:
+   * dollars that came or went are counted exactly when the engine next looks, and tokens that were ADDED count as
+   * bought at the hour it sees them. Tokens that were TAKEN OUT are the one thing that cannot be valued later:
+   * priced at the day the agent comes back, the market's moves since they left would be booked as the agent's
+   * doing. Only the vault's owner can take tokens out, and the fair reading is that they left when the agent
+   * stopped. So they are taken off the agent's record at the price of its last decision: its base shrinks by
+   * that much and nothing else changes. What is left keeps its entry price, its stop, and its gain or loss over
+   * the pause.
    */
-  async function restartMeasurementIfTokensMoved(a: { id: string; plan: Prisma.JsonValue; startingCash: number }, vault: Extract<LiveCheck, { ok: true }>) {
+  async function settleTokensTakenOutWhileStopped(a: { id: string; startingCash: number }, vault: Extract<LiveCheck, { ok: true }>) {
     const state = await deps.prisma.agentState.findUnique({ where: { agentId: a.id } });
-    if (!state || vault.price == null || vault.tokenUsd == null) return;
-    const plan = a.plan as unknown as Plan;
-    const counts = state.qty > 0 ? vault.tokenUsd >= LIVE.positionFloorUsd : strayTokensArePosition(vault.tokenUsd, vault.cash, plan.sizePctOfCash);
-    const qty = counts ? vault.tokenQty : 0;
-    if (Math.abs(qty - state.qty) * vault.price < LIVE.positionFloorUsd) return;
-    const last = await deps.prisma.decision.findFirst({ where: { agentId: a.id }, orderBy: { hour: "desc" }, select: { equityAfter: true, basisAfter: true } });
-    const perUnit = last?.basisAfter && last.basisAfter > 0 && last.equityAfter > 0 ? last.equityAfter / last.basisAfter : 1;
-    const equity = vault.cash + qty * vault.price;
-    const basis = equity / perUnit;
+    if (!state || state.qty <= 0) return;
+    const last = await deps.prisma.decision.findFirst({ where: { agentId: a.id }, orderBy: { hour: "desc" }, select: { markPrice: true } });
+    const price = last?.markPrice ?? state.avgEntry ?? vault.price;
+    if (price == null || !(price > 0)) return;
+    // Less than an order's worth gone is left to the engine's own bookkeeping.
+    if ((state.qty - vault.tokenQty) * price < LIVE.minOrderUsd) return;
+    const remaining = vault.tokenQty * price >= LIVE.positionFloorUsd ? vault.tokenQty : 0;
+    const then = state.cash + state.qty * price;
+    const left = then - (state.qty - remaining) * price;
+    // If nothing measurable is left on the record, the base stays as it is: the engine starts again from the
+    // last value per unit when it next finds money in the vault.
+    const basis = left >= 1 && then > 0 ? a.startingCash * (left / then) : a.startingCash;
     if (!Number.isFinite(basis) || basis <= 0) return;
     const scale = a.startingCash > 0 ? basis / a.startingCash : 1;
     await deps.prisma.$transaction([
       deps.prisma.agentState.update({
         where: { agentId: a.id },
         data: {
-          cash: vault.cash,
-          qty,
-          avgEntry: qty > 0 ? vault.price : null,
-          peak: qty > 0 ? vault.price : null,
-          dayStart: new Date(Math.floor(now() / (24 * HOUR_MS)) * 24 * HOUR_MS),
-          dayStartEquity: equity,
-          lastEquity: equity,
+          qty: remaining,
+          ...(remaining === 0 ? { avgEntry: null, peak: null } : {}),
+          dayStartEquity: state.dayStartEquity * scale,
+          lastEquity: left,
           ...(state.peakEquity != null ? { peakEquity: state.peakEquity * scale } : {}),
         },
       }),
@@ -264,10 +267,15 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (!a || a.userId !== user.id || a.status === "archived") return sendError(reply, 404, "not_found", "No such agent.");
     if (a.status !== body.data.status) {
       if (body.data.status === "active" && a.mode === "live") {
+        // An order this agent placed that the engine has not written down yet is still moving the vault. Until
+        // it is on record, the vault cannot be told apart from the order's own effect, so the agent waits.
+        const lastDecided = await deps.prisma.decision.findFirst({ where: { agentId: a.id }, orderBy: { hour: "desc" }, select: { hour: true } });
+        const unbooked = await deps.prisma.liveOrder.findFirst({ where: { agentId: a.id, ...(lastDecided ? { hour: { gt: lastDecided.hour } } : {}) }, select: { id: true } });
+        if (unbooked) return sendError(reply, 409, "order_pending", "This agent's last order is still being written down. Try again in a few minutes.");
         // A live agent only resumes on a vault that can be traded right now.
         const vault = await checkVault(user, a.market, false, a.vault);
         if (!vault.ok) return sendError(reply, vault.status, vault.error, vault.message);
-        await restartMeasurementIfTokensMoved(a, vault);
+        await settleTokensTakenOutWhileStopped(a, vault);
       }
       await deps.prisma.agent.update({
         where: { id: a.id },
@@ -329,7 +337,8 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     // withdrawals, so every hour is divided by the base it had at the time (stored with the decision).
     const active = [...new Set(rows.map((r) => r.agentId))];
     const firstBase = new Map<string, number>();
-    for (const r of rows) if (!firstBase.has(r.agentId)) firstBase.set(r.agentId, r.basisAfter ?? byId.get(r.agentId)!.startingCash);
+    const baseOf = (r: { agentId: string; basisAfter: number | null }) => (r.basisAfter != null && r.basisAfter > 0 ? r.basisAfter : byId.get(r.agentId)!.startingCash);
+    for (const r of rows) if (!firstBase.has(r.agentId)) firstBase.set(r.agentId, baseOf(r));
     const eq = new Map(active.map((id) => [id, firstBase.get(id)!]));
     const hold = new Map(active.map((id) => [id, firstBase.get(id)!]));
     const base = new Map(active.map((id) => [id, firstBase.get(id)!]));
@@ -338,7 +347,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     for (const r of rows) {
       eq.set(r.agentId, r.equityAfter);
       hold.set(r.agentId, r.holdingEquityAfter);
-      base.set(r.agentId, r.basisAfter ?? byId.get(r.agentId)!.startingCash);
+      base.set(r.agentId, baseOf(r));
       const p = { t: r.hour.getTime(), e: sum(eq), h: sum(hold), b: sum(base) };
       if (points.length && points[points.length - 1]!.t === p.t) points[points.length - 1] = p;
       else points.push(p);
@@ -347,6 +356,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     const since = now() - 30 * 24 * HOUR_MS;
     const series: CurvePointDTO[] = points
       .filter((p) => p.t >= since)
+      .filter((p) => p.b > 0)
       .map((p) => ({ t: new Date(p.t).toISOString(), strategy: (p.e / p.b) * 100, holding: (p.h / p.b) * 100 }));
     return {
       agentCount: agents.length,

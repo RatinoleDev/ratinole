@@ -806,6 +806,37 @@ describe.skipIf(!hasDb)("live agents", () => {
     expect(d.equityAfter / d.basisAfter!).toBeCloseTo(perUnit, 9);
   });
 
+  it("an order that never confirmed and a vault emptied in the same hour do not leave a base of zero", async () => {
+    const chain = new PretendChain();
+    chain.drop = "lost";
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
+    chain.drop = null;
+    // The owner takes everything out while the order's fate is unknown.
+    chain.stable = 0n;
+    chain.token = 0n;
+    await run(chain, agent.id, H0, 28);
+    const [d] = await decisions(agent.id);
+    // The hour is booked on what the agent held, with no flow, and every figure stays divisible.
+    expect(d).toMatchObject({ action: "hold", execError: "the chain never confirmed the order", flowUsd: null });
+    expect(d!.equityAfter).toBeCloseTo(1000, 6);
+    expect(d!.basisAfter).toBeCloseTo(1000, 6);
+    const stopped = await prisma.agent.findUniqueOrThrow({ where: { id: agent.id }, include: { state: true } });
+    expect(stopped).toMatchObject({ status: "paused", pausedReason: expect.stringMatching(/vault is empty/) });
+    expect(stopped.startingCash).toBeCloseTo(1000, 6);
+    expect(stopped.state).toMatchObject({ cash: 0, qty: 0, avgEntry: null });
+    // A deposit and a resume later, the value per unit carries on from where it stood.
+    const later = H0 + 6 * HOUR_MS;
+    chain.stable = usdg(600);
+    await prisma.agent.update({ where: { id: agent.id }, data: { status: "active", pausedReason: null, owedFrom: new Date(later) } });
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { lastBuyAt: new Date(later - HOUR_MS) } });
+    await run(chain, agent.id, later);
+    const second = (await decisions(agent.id))[1]!;
+    expect(second.flowUsd).toBeCloseTo(600, 6);
+    expect(second.basisAfter).toBeGreaterThan(0);
+    expect(second.equityAfter / second.basisAfter!).toBeCloseTo(d!.equityAfter / d!.basisAfter!, 9);
+  });
+
   it("the paper runner refuses a live agent, and the tick sends it to the live runner", async () => {
     const chain = new PretendChain();
     const agent = await launch(chain);

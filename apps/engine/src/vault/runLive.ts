@@ -234,7 +234,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   // If the owner moved money right after the order, these can dip below zero; that move is next hour's flow.
   if (stableRaw < 0n) stableRaw = 0n;
   if (tokenRaw < 0n) tokenRaw = 0n;
-  const cash = fromUnits(stableRaw, LIVE_STABLE.decimals);
+  let cash = fromUnits(stableRaw, LIVE_STABLE.decimals);
   const held = fromUnits(tokenRaw, token.decimals);
   const before = toState(stored);
   // What counts as the agent's position:
@@ -244,13 +244,25 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   //    the plan's own orders. Anything less is left alone until the agent next buys, so nobody can stop an agent
   //    from buying by sending its vault a few cents of the token.
   const heldUsd = held * mark;
-  const qty = before.qty > 0 ? (heldUsd >= LIVE.positionFloorUsd ? held : 0) : strayTokensArePosition(heldUsd, cash, plan.sizePctOfCash) ? held : 0;
-  const equityNow = cash + qty * mark;
-  if (equityNow < EMPTY_USD && !order) {
-    // The vault was seen empty at this hour. Write that down: if the owner deposits and resumes later, the money
-    // that left is then valued as of now, not at whatever the price is on the day they come back.
-    await prisma.agentState.update({ where: { agentId }, data: { cash: 0, qty: 0, avgEntry: null, peak: null } });
-    return pause(prisma, agentId, "The vault is empty, so this agent was stopped. Deposit, then resume it.");
+  let qty = before.qty > 0 ? (heldUsd >= LIVE.positionFloorUsd ? held : 0) : strayTokensArePosition(heldUsd, cash, plan.sizePctOfCash) ? held : 0;
+  let equityNow = cash + qty * mark;
+  const EMPTY = "The vault is empty, so this agent was stopped. Deposit, then resume it.";
+  // The vault was seen empty at this hour. That is written down (the stored position is zeroed): if the owner
+  // deposits and resumes later, the money that left is then valued as of now, not at whatever the price is on the
+  // day they come back.
+  const zeroStored = () => prisma.agentState.update({ where: { agentId }, data: { cash: 0, qty: 0, avgEntry: null, peak: null } });
+  const emptied = equityNow < EMPTY_USD;
+  if (emptied && !order) {
+    await zeroStored();
+    return pause(prisma, agentId, EMPTY);
+  }
+  if (emptied) {
+    // Empty, and there is an order to write down (the owner took everything out in the same hour). Measured
+    // against an empty vault the hour would end on a base of zero, and every figure after it would be divided by
+    // nothing. So the hour is booked on what the agent held before, with no flow, and the agent stops right after.
+    cash = before.cash;
+    qty = before.qty;
+    equityNow = before.cash + before.qty * mark;
   }
 
   // Deposits and withdrawals since the last decision. The agent's base (startingCash) moves with them the way a
@@ -261,12 +273,17 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   const basis = agent.startingCash;
   let newBasis = basis;
   if (flowUsd !== 0) {
-    const lastDecision = await prisma.decision.findFirst({ where: { agentId }, orderBy: { hour: "desc" }, select: { equityAfter: true, basisAfter: true } });
-    const lastNav = lastDecision?.basisAfter && lastDecision.basisAfter > 0 && lastDecision.equityAfter > 0 ? lastDecision.equityAfter / lastDecision.basisAfter : 1;
+    // The last value per unit that means something: from a decision made with money in the vault.
+    const lastDecision = await prisma.decision.findFirst({
+      where: { agentId, equityAfter: { gte: EMPTY_USD }, basisAfter: { gt: 0 } },
+      orderBy: { hour: "desc" },
+      select: { equityAfter: true, basisAfter: true },
+    });
+    const lastNav = lastDecision?.basisAfter ? lastDecision.equityAfter / lastDecision.basisAfter : 1;
     const nav = equityBefore >= EMPTY_USD && basis > 0 ? equityBefore / basis : lastNav;
     newBasis = equityBefore < EMPTY_USD ? equityNow / nav : basis + flowUsd / nav;
     // Whatever happened, the base stays a positive, finite number: everything shown is divided by it.
-    if (!Number.isFinite(newBasis) || newBasis <= 0) newBasis = equityNow / (Number.isFinite(nav) && nav > 0 ? nav : 1);
+    if (!Number.isFinite(newBasis) || newBasis <= 0) newBasis = basis > 0 ? basis : 1;
   }
   const scale = basis > 0 ? newBasis / basis : 1;
   // Tokens the owner added count as bought at this hour's price; tokens taken out leave the cost per token alone.
@@ -486,7 +503,11 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     return skip("moved on");
   }
   log("info", "live agent run", { agentId, action: d.action, txHash: outcome?.txHash, flowUsd: flowUsd || undefined, upTo: new Date(hour).toISOString() });
-  // The order is on record. If the vault may no longer be traded, the agent stops now.
+  // The order is on record. If the vault may no longer be traded, or was found empty, the agent stops now.
   if (stop) await pause(prisma, agentId, stop);
+  else if (emptied) {
+    await zeroStored();
+    await pause(prisma, agentId, EMPTY);
+  }
   return { agentId, decided: 1, late: isLate ? 1 : 0, skipped: false };
 }
