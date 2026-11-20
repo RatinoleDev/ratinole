@@ -114,6 +114,9 @@ pm2 reload ecosystem.config.cjs --update-env
 
 - **The agent's fee money.** `node scripts/go-live.mjs status` shows how much ETH the operator address holds.
   If it runs out, orders stop going through and decisions say so. Top it up.
+- **The chain connection.** The server and visitors' browsers read the chain through the public RPC, which is
+  rate-limited. Before real volume, get a dedicated endpoint: `LIVE_RPC_URL` in `.env` for the server, and
+  `NEXT_PUBLIC_CHAIN_RPC_URL` set when the website is built for the browser.
 - **One engine only.** Exactly one engine process signs with the operator key. The manual `tick` command never
   trades live.
 - **What a user sees when an order fails.** The decision for that hour is a hold with the reason (the vault is
