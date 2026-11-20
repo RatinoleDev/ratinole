@@ -37,6 +37,18 @@ const agent = {
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
+/** What the server says about live trading. Off by default, as on a site with no contracts configured. */
+const chainConfig = (live: boolean) => ({
+  live,
+  chainId: 4663,
+  explorerUrl: "https://robinhoodchain.blockscout.com",
+  factory: live ? "0xfac70000000000000000000000000000000000aa" : null,
+  operator: live ? "0x0be7a70700000000000000000000000000000001" : null,
+  stable: { symbol: "USDG", address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", decimals: 6 },
+  tokens: [{ market: "ETH", symbol: "WETH", address: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", decimals: 18 }],
+  limits: { minVaultUsd: 5, maxVaultUsd: 500, defaultSlippageBps: 100, defaultDailyLimitUsd: 500 },
+});
+
 /** Mock the API. `signedIn` decides what /api/me returns; `extra` overrides handlers by "METHOD /path". */
 async function mockApi(page: Page, opts: { signedIn: boolean; extra?: Record<string, (route: Route) => unknown> }) {
   await page.route("**/api/**", async (route) => {
@@ -45,6 +57,7 @@ async function mockApi(page: Page, opts: { signedIn: boolean; extra?: Record<str
     const custom = opts.extra?.[key];
     if (custom) return custom(route);
     if (key === "GET /me") return opts.signedIn ? json(route, me) : json(route, { error: "unauthorized", message: "Sign in" }, 401);
+    if (key === "GET /public/chain") return json(route, chainConfig(false));
     if (key === "GET /agents") return json(route, opts.signedIn ? [agent] : []);
     if (key === "GET /overview") return json(route, { agentCount: 1, kpis: null, series: [], latest: [] });
     if (key === "GET /leaderboard") return json(route, []);
@@ -435,4 +448,95 @@ test("wallet picker: closing it while the wallet is waiting frees the buttons to
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
   await expect(connectButton).toBeEnabled();
+});
+
+test("live mode stays off until the server says it is open", async ({ page }) => {
+  await mockApi(page, { signedIn: true });
+  await page.goto("/app/vault");
+  await expect(page.getByRole("button", { name: "Live" })).toBeDisabled();
+  // The vault page is a preview: nothing can be sent.
+  await expect(page.getByText("No vault yet. Vaults open with live trading.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pause vault" })).toBeDisabled();
+  await page.goto("/app/studio");
+  await expect(page.getByRole("button", { name: /Launch live/ })).toHaveCount(0);
+});
+
+test("live mode: real-money agents are listed apart, with their transactions and why one was stopped", async ({ page }) => {
+  const modes: string[] = [];
+  const liveAgent = { ...agent, id: "ag9", name: "Northing", mode: "live", vault: "0x7a11700000000000000000000000000000000001", status: "paused", pausedReason: "The vault is empty, so this agent was stopped. Deposit, then resume it.", decisions: 1 };
+  const decision = {
+    id: "d1", agentId: "ag9", agentName: "Northing", mode: "live", house: false, strategy: "s", market: "ETH", marketLabel: "ETH / USDG",
+    at: "2026-11-20T11:00:00.000Z", hour: "2026-11-20T11:00:00.000Z", action: "buy", confidence: 61, regime: "ranging", evidence: [], guard: [],
+    explanation: "Buy. Scheduled purchase (every week). Bought $10.00 of ETH at $1,738.05, 10% of cash.", late: false, txHash: "0xabc123", flowUsd: 50,
+    fill: { side: "buy", price: 1738.05, qty: 0.005753, notional: 10, fee: 0.001 }, equityAfter: 100, holdingEquityAfter: 100, markPrice: 1738, candleSource: "binance:ETHUSDT",
+  };
+  await mockApi(page, {
+    signedIn: true,
+    extra: {
+      "GET /public/chain": (r) => json(r, chainConfig(true)),
+      "GET /agents": (r) => {
+        const mode = new URL(r.request().url()).searchParams.get("mode") ?? "";
+        modes.push(mode);
+        return json(r, mode === "live" ? [liveAgent] : [agent]);
+      },
+      "GET /agents/ag9/decisions": (r) => json(r, [decision]),
+    },
+  });
+  await page.goto("/app/agents");
+  await expect(page.getByRole("heading", { name: "Meridian" })).toBeVisible();
+  await page.getByRole("button", { name: "Live" }).click();
+  await expect(page.getByRole("heading", { name: "Northing" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meridian" })).toHaveCount(0);
+  expect(modes).toContain("paper");
+  expect(modes).toContain("live");
+  await expect(page.locator(".livetag")).toHaveText("Live");
+  await expect(page.getByText(/Stopped by the engine\./)).toBeVisible();
+  await expect(page.getByText(/The vault is empty, so this agent was stopped/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /See the transaction/ })).toHaveAttribute("href", "https://robinhoodchain.blockscout.com/tx/0xabc123");
+  await expect(page.getByText(/You deposited \$50\.00 since the previous decision/)).toBeVisible();
+  await expect(page.getByText("Live trading: real money in your own vault.")).toBeVisible();
+  // The choice is remembered on this device.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Northing" })).toBeVisible();
+});
+
+test("studio: launching live asks plainly first, and a refusal points to the vault", async ({ page }) => {
+  const bodies: unknown[] = [];
+  let refuse = true;
+  await mockApi(page, {
+    signedIn: true,
+    extra: {
+      "GET /public/chain": (r) => json(r, chainConfig(true)),
+      "POST /intake": (r) => json(r, { ok: true, plan, reader: "rules", rows: [{ label: "Market", lines: ["ETH / USDG"] }], checks: [], notes: [], notChecked: [] }),
+      "POST /backtests": (r) => json(r, { id: "bt1" }),
+      "GET /backtests/bt1": (r) =>
+        json(r, {
+          id: "bt1", status: "done", sentence: "s", plan, market: "ETH", marketLabel: "ETH / USDG", source: "Binance ETHUSDT hourly", label: "Price signals only", createdAt: "2026-11-19T10:00:00.000Z",
+          result: { from: "2026-08-21T09:00:00.000Z", split: "2026-10-20T09:00:00.000Z", to: "2026-11-19T08:00:00.000Z", candles: 2883, costPct: 0.1, tunedDays: 60, unseenDays: 30, tunedReturnPct: 1, unseenReturnPct: -1, holdingTunedPct: 0, holdingUnseenPct: 0, maxDrawdownPct: -2, tunedTrades: 20, unseenTrades: 12, paramsText: [], warnings: [], curve: [] },
+        }),
+      "POST /agents": (r) => {
+        bodies.push(r.request().postDataJSON());
+        if (refuse) return json(r, { error: "no_vault", message: "Create your vault on the Vault page first." }, 409);
+        return json(r, { ...agent, id: "ag9", name: "Northing", mode: "live" }, 201);
+      },
+    },
+  });
+  await page.goto("/app/studio");
+  await page.getByRole("button", { name: "Understand" }).click();
+  await page.getByRole("button", { name: "Looks right, run backtest" }).click();
+  await page.getByRole("button", { name: "Launch live with my vault" }).click();
+  const box = page.getByRole("group", { name: "Launch with real money" });
+  await expect(box).toContainText("It can lose money.");
+  await expect(box).toContainText("have not had an independent security audit");
+  const start = box.getByRole("button", { name: "Start live agent" });
+  await expect(start).toBeDisabled();
+  expect(bodies).toHaveLength(0);
+  await box.getByLabel(/I understand this uses real money/).check();
+  await start.click();
+  await expect(box.getByRole("alert")).toContainText("Create your vault on the Vault page first.");
+  await expect(box.getByRole("link", { name: "Open the Vault page" })).toHaveAttribute("href", "/app/vault");
+  refuse = false;
+  await start.click();
+  await expect(page).toHaveURL(/\/app\/agents$/);
+  expect(bodies).toEqual([{ backtestId: "bt1", mode: "live" }, { backtestId: "bt1", mode: "live" }]);
 });

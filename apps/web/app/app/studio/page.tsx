@@ -2,11 +2,13 @@
 
 import type { AgentDTO, BacktestDTO, IntakeResponse } from "@rationale/config";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Chart, splitIndexOf } from "../../../components/Chart";
 import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
+import { useMode } from "../../../components/app/Mode";
 import { useSession } from "../../../components/app/Session";
 import { Robot3D } from "../../../components/robot/Robot3D";
 import { RobotAvatar } from "../../../components/robot/RobotAvatar";
@@ -49,6 +51,11 @@ export default function StudioPage() {
   const [starting, setStarting] = useState(false);
   const [btError, setBtError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
+  const { liveOn, setMode } = useMode();
+  /** The real-money confirmation: shown, agreed to, and what the server said if it refused. */
+  const [liveAsk, setLiveAsk] = useState(false);
+  const [agree, setAgree] = useState(false);
+  const [liveError, setLiveError] = useState<{ message: string; vault: boolean } | null>(null);
 
   const bt = useQuery({
     queryKey: ["backtest", backtestId],
@@ -64,6 +71,9 @@ export default function StudioPage() {
     const t = text.trim();
     setBacktestId(null);
     setBtError(null);
+    setLiveAsk(false);
+    setAgree(false);
+    setLiveError(null);
     if (!t) return;
     if (!me) {
       setIntake({ kind: "signin" });
@@ -114,6 +124,29 @@ export default function StudioPage() {
       router.push("/app/agents");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Launch failed.");
+    } finally {
+      setLaunching(false);
+    }
+  }
+
+  async function launchLive() {
+    if (!backtestId || !agree) return;
+    setLaunching(true);
+    setLiveError(null);
+    try {
+      const agent = await post<AgentDTO>("/agents", { backtestId, mode: "live" });
+      toast(`${agent.name} launched live on your vault`);
+      refresh();
+      await qc.invalidateQueries({ queryKey: ["agents"] });
+      setMode("live");
+      router.push("/app/agents");
+    } catch (e) {
+      // Most refusals are about the vault, and are fixed on the Vault page.
+      const code = e instanceof ApiFailure ? e.code : "";
+      setLiveError({
+        message: e instanceof Error ? e.message : "The live agent could not be started.",
+        vault: ["no_vault", "vault_empty", "vault_paused", "agent_access", "token_not_allowed", "beta_cap", "not_your_vault"].includes(code),
+      });
     } finally {
       setLaunching(false);
     }
@@ -205,10 +238,47 @@ export default function StudioPage() {
             )}
             {r && (
               <button className="btn blue" onClick={() => void launch()} disabled={launching}>
-                {launching ? "Launching…" : "Launch in paper mode"}
+                {launching && !liveAsk ? "Launching…" : "Launch in paper mode"}
+              </button>
+            )}
+            {r && liveOn && !liveAsk && (
+              <button className="btn ghost" onClick={() => setLiveAsk(true)} disabled={launching}>
+                Launch live with my vault
               </button>
             )}
           </div>
+
+          {r && b && liveOn && liveAsk && (
+            <div className="livebox" role="group" aria-label="Launch with real money">
+              <h2>Launch with real money</h2>
+              <p>
+                This agent will trade {b.marketLabel} inside your vault once an hour, within the limits your vault enforces. It can lose money. Backtests and past
+                results do not predict future returns, and the vault contracts have not had an independent security audit yet.
+              </p>
+              <ul>
+                <li>A vault runs one live agent at a time.</li>
+                <li>You can pause the agent, pause the vault, or withdraw at any time.</li>
+              </ul>
+              <label className="agree">
+                <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+                I understand this uses real money and that I can lose it.
+              </label>
+              {liveError && (
+                <p className="liveerr" role="alert">
+                  {liveError.message}{" "}
+                  {liveError.vault && <Link href="/app/vault">Open the Vault page</Link>}
+                </p>
+              )}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn blue" onClick={() => void launchLive()} disabled={!agree || launching}>
+                  {launching ? "Starting…" : "Start live agent"}
+                </button>
+                <button className="btn ghost" onClick={() => setLiveAsk(false)} disabled={launching}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {intake.kind === "signin" && (
             <div className="errbox connect">

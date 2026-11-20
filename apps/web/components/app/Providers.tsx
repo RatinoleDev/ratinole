@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { WagmiProvider } from "wagmi";
 import { wagmiConfig } from "../../lib/wagmi";
 import { ToastProvider } from "../Toast";
+import { ModeProvider } from "./Mode";
 import { SessionProvider } from "./Session";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -15,7 +16,9 @@ export function Providers({ children }: { children: ReactNode }) {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={client}>
         <ToastProvider>
-          <SessionProvider>{children}</SessionProvider>
+          <SessionProvider>
+            <ModeProvider>{children}</ModeProvider>
+          </SessionProvider>
         </ToastProvider>
       </QueryClientProvider>
     </WagmiProvider>

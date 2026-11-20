@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Chart } from "../../components/Chart";
 import { DecisionRow } from "../../components/app/DecisionFeed";
+import { useMode } from "../../components/app/Mode";
 import { ConnectPanel, useSession } from "../../components/app/Session";
 import { BotNote } from "../../components/robot/RobotAvatar";
 import { api } from "../../lib/api";
@@ -12,9 +13,11 @@ import { pct, upDown, usd } from "../../lib/format";
 
 export default function OverviewPage() {
   const { me } = useSession();
+  const { mode } = useMode();
+  const live = mode === "live";
   const q = useQuery({
-    queryKey: ["overview"],
-    queryFn: () => api<OverviewDTO>("/overview"),
+    queryKey: ["overview", mode],
+    queryFn: () => api<OverviewDTO>(`/overview?mode=${mode}`),
     enabled: !!me,
     refetchInterval: 60_000,
   });
@@ -24,8 +27,8 @@ export default function OverviewPage() {
     <section>
       <div className="kpis">
         <div className="kpi">
-          <small>Portfolio value</small>
-          <b className="num">{k ? usd(k.equity) : "–"}</b>
+          <small>{live ? "Value in your vault" : "Portfolio value"}</small>
+          <b className="num">{k ? usd(k.equity, live ? 2 : 0) : "–"}</b>
         </div>
         <div className="kpi">
           <small>Return since start</small>
@@ -41,12 +44,14 @@ export default function OverviewPage() {
         </div>
       </div>
       {!me ? (
-        <ConnectPanel text="Sign in with your wallet to see your paper agents, their results against holding, and every decision they make." />
+        <ConnectPanel text="Sign in with your wallet to see your agents, their results against holding, and every decision they make." />
       ) : (
         <div className="grid2">
           <div className="panel">
             <h2>Your agents against simply holding</h2>
-            <p className="hint">Last 30 days, all agents combined. 100 = starting cash.</p>
+            <p className="hint">
+              {live ? "Last 30 days. 100 = the money put in; deposits and withdrawals are not counted as gains or losses." : "Last 30 days, all agents combined. 100 = starting cash."}
+            </p>
             {q.isError ? (
               <p className="empty">The service is not available right now. Try again in a moment.</p>
             ) : o && o.series.length > 1 ? (
@@ -74,7 +79,9 @@ export default function OverviewPage() {
                     ? o.latest.length > 0
                       ? "The chart starts with the second hourly decision. It fills in as your agents run."
                       : "Your agents have not made their first hourly decision yet. The chart fills in as they run."
-                    : "Launch your first agent in Agent Studio. Its results against holding appear here."}
+                    : live
+                      ? "No live agent yet. Create your vault, deposit, then launch a strategy live from Agent Studio."
+                      : "Launch your first agent in Agent Studio. Its results against holding appear here."}
                 </BotNote>
                 {!(o && o.agentCount > 0) && (
                   <Link className="btn blue" href="/app/studio">

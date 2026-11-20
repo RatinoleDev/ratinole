@@ -10,6 +10,7 @@ import { useToast } from "../Toast";
 import { useAccount } from "wagmi";
 import { ensureRobinhoodChain, type Eip1193 } from "../../lib/chain";
 import { RobotAvatar } from "../robot/RobotAvatar";
+import { useMode } from "./Mode";
 import { useSession } from "./Session";
 
 type NavItem = { href: string; label: string; sub: string; icon?: string; count?: boolean };
@@ -133,6 +134,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const toast = useToast();
   const { me } = useSession();
+  const { mode, setMode, liveOn } = useMode();
   const nav = useRef<HTMLElement>(null);
   // On a phone the links are one row that scrolls sideways: keep the current page's link in view.
   useEffect(() => {
@@ -169,7 +171,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="foot">
           <RobotAvatar seed="ratinole" size={42} tile house />
           <span>
-            Paper trading with virtual money.
+            {mode === "live" ? "Live trading: real money in your own vault." : "Paper trading with virtual money."}
             <br />
             <Link href="/">Back to site</Link>
           </span>
@@ -181,15 +183,20 @@ export function Shell({ children }: { children: ReactNode }) {
             <h1>{active.label}</h1>
             <p>{active.sub}</p>
           </div>
-          <span className="sample">Paper</span>
+          <span className={`sample${mode === "live" ? " live" : ""}`}>{mode === "live" ? "Live" : "Paper"}</span>
           <div className="seg" role="group" aria-label="Mode">
-            <button className="on" aria-pressed="true">
+            <button className={mode === "paper" ? "on" : undefined} aria-pressed={mode === "paper"} onClick={() => setMode("paper")}>
               Paper
             </button>
             <button
-              disabled
-              title="Live trading opens with vaults"
-              onClick={() => toast("Live trading opens with vaults")}
+              className={mode === "live" ? "on" : undefined}
+              aria-pressed={mode === "live"}
+              disabled={!liveOn}
+              title={liveOn ? "Real money in your own vault" : "Live trading opens with vaults"}
+              onClick={() => {
+                setMode("live");
+                toast("Live mode: real money in your own vault.");
+              }}
             >
               Live
             </button>

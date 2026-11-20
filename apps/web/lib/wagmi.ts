@@ -2,12 +2,17 @@ import { CHAIN } from "@rationale/config";
 import { defineChain } from "viem";
 import { createConfig, http, injected } from "wagmi";
 
+/** The public RPC, unless a build sets another one (a local fork, for rehearsing live trading with fake money). */
+const rpcUrl = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || CHAIN.rpcUrl;
+
 export const robinhoodChain = defineChain({
   id: CHAIN.id,
   name: CHAIN.name,
   nativeCurrency: CHAIN.nativeCurrency,
-  rpcUrls: { default: { http: [CHAIN.rpcUrl] } },
+  rpcUrls: { default: { http: [rpcUrl] } },
   blockExplorers: { default: { name: "Blockscout", url: CHAIN.explorerUrl } },
+  // Lets several reads of a vault travel as one request.
+  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
 });
 
 /**

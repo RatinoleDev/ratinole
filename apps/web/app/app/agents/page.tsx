@@ -1,12 +1,13 @@
 "use client";
 
-import type { AgentDTO, DecisionDTO } from "@rationale/config";
+import { CHAIN, explorerAddress, type AgentDTO, type DecisionDTO } from "@rationale/config";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
 import { DecisionRow } from "../../../components/app/DecisionFeed";
+import { useMode } from "../../../components/app/Mode";
 import { ConnectPanel, useSession } from "../../../components/app/Session";
 import { Robot3D } from "../../../components/robot/Robot3D";
 import { RobotAvatar } from "../../../components/robot/RobotAvatar";
@@ -90,7 +91,7 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
           <div>
             <h3>{agent.name}</h3>
             <small>
-              {agent.marketLabel}, Paper
+              {agent.marketLabel}, {agent.mode === "live" ? <b className="livetag">Live</b> : "Paper"}
             </small>
           </div>
         </div>
@@ -111,7 +112,17 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
       <div className="log feed">
         <div className="ctl">
           <p>
-            Launched {dateLabel(agent.launchedAt)} with ${agent.startingCash.toLocaleString("en-US")} virtual.{" "}
+            {agent.mode === "live" ? (
+              <>
+                Launched {dateLabel(agent.launchedAt)} on{" "}
+                <a href={explorerAddress(CHAIN.explorerUrl, agent.vault ?? "")} target="_blank" rel="noopener noreferrer">
+                  your vault ↗
+                </a>{" "}
+                with real money.{" "}
+              </>
+            ) : (
+              <>Launched {dateLabel(agent.launchedAt)} with ${agent.startingCash.toLocaleString("en-US")} virtual. </>
+            )}
             {agent.decisions} decision{agent.decisions === 1 ? "" : "s"} so far.
           </p>
           <div style={{ display: "flex", gap: 8 }}>
@@ -126,6 +137,11 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
             </button>
           </div>
         </div>
+        {agent.pausedReason && (
+          <p className="pausewhy" role="note">
+            <b>Stopped by the engine.</b> {agent.pausedReason}
+          </p>
+        )}
         {showPlan && (
           <div className="row">
             <p style={{ marginBottom: 10, fontStyle: "italic" }}>&ldquo;{agent.sentence}&rdquo;</p>
@@ -147,13 +163,14 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
 
 export default function AgentsPage() {
   const { me } = useSession();
+  const { mode } = useMode();
   const q = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => api<AgentDTO[]>("/agents"),
+    queryKey: ["agents", mode],
+    queryFn: () => api<AgentDTO[]>(`/agents?mode=${mode}`),
     enabled: !!me,
     refetchInterval: 60_000,
   });
-  if (!me) return <ConnectPanel text="Sign in with your wallet to see your paper agents and every decision they make." />;
+  if (!me) return <ConnectPanel text="Sign in with your wallet to see your agents and every decision they make." />;
   if (q.isLoading) return <div className="panel"><p className="empty">Loading your agents…</p></div>;
   if (q.isError)
     return (
@@ -167,8 +184,12 @@ export default function AgentsPage() {
       <div className="panel connect withbot">
         <Robot3D mood="sleeping" greet={false} />
         <div>
-          <h2>No agents yet</h2>
-          <p>Write a strategy in a sentence, check how it was understood, backtest it, then launch it in paper mode.</p>
+          <h2>{mode === "live" ? "No live agent yet" : "No agents yet"}</h2>
+          <p>
+            {mode === "live"
+              ? "Create your vault and deposit on the Vault page. Then write a strategy, backtest it, and launch it live."
+              : "Write a strategy in a sentence, check how it was understood, backtest it, then launch it in paper mode."}
+          </p>
           <Link className="btn blue" href="/app/studio">
             Open Agent Studio
           </Link>

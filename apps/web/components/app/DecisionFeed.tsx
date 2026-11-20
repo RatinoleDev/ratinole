@@ -1,6 +1,6 @@
 "use client";
 
-import type { DecisionDTO } from "@rationale/config";
+import { CHAIN, explorerTx, type DecisionDTO } from "@rationale/config";
 import { useState } from "react";
 import { actionLabel, actionTag, hourLabel, signed, usd } from "../../lib/format";
 import { RobotAvatar } from "../robot/RobotAvatar";
@@ -27,12 +27,24 @@ export function DecisionRow({ d, showAgent = false }: { d: DecisionDTO; showAgen
         )}
       </div>
       {d.explanation}
+      {d.flowUsd != null && (
+        <div className="meta" style={{ marginTop: 4, marginBottom: 0 }}>
+          <span>
+            {d.flowUsd > 0 ? "You deposited" : "You withdrew"} {usd(Math.abs(d.flowUsd), 2)} since the previous decision. It is not counted as a gain or a loss.
+          </span>
+        </div>
+      )}
       {d.fill && (
         <div className="meta" style={{ marginTop: 4, marginBottom: 0 }}>
           <span>
             {d.fill.side === "buy" ? "Bought" : "Sold"} {d.fill.qty.toFixed(6)} at {usd(d.fill.price, 2)}, {usd(d.fill.notional, 2)}{" "}
             with {usd(d.fill.fee, 2)} cost
           </span>
+          {d.txHash && (
+            <a href={explorerTx(CHAIN.explorerUrl, d.txHash)} target="_blank" rel="noopener noreferrer">
+              See the transaction ↗
+            </a>
+          )}
         </div>
       )}
       <div>

@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const apiUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4000";
-const rpcOrigin = "https://robinhood.drpc.org";
+// The browser reads vaults straight from the chain. A rehearsal build may point at a local fork instead.
+const rpcOrigin = process.env.NEXT_PUBLIC_CHAIN_RPC_URL ? new URL(process.env.NEXT_PUBLIC_CHAIN_RPC_URL).origin : "https://robinhood.drpc.org";
 
 // Next 14 hydrates with inline scripts, so script-src needs 'unsafe-inline'
 // unless nonces are added. Everything else is locked to this origin. Fonts are

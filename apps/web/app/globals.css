@@ -1075,3 +1075,39 @@ body:has(.appdark){background:#070708}
   .lb td,.lb th{white-space:nowrap}
 }
 @media (prefers-reduced-motion:reduce){.rbot *,.btbar{animation:none!important}.robot3d canvas,.robot3d .still{transition:none}}
+
+/* ===== live trading: vault screens and the real-money confirmation ===== */
+.risknote{margin:0 0 20px;padding:14px 18px;border-radius:16px;font-size:14.5px;line-height:1.5;color:#F6DFA8;background:rgba(242,193,78,.08);box-shadow:inset 0 0 0 1px rgba(242,193,78,.3)}
+.risknote b{color:#F6CF6B}
+.appdark .sample.live{background:rgba(242,193,78,.12);box-shadow:inset 0 0 0 1px rgba(242,193,78,.45);color:#F6CF6B}
+.livetag{font-weight:700;color:#F6CF6B}
+.vaultcol{display:grid;gap:20px;min-width:0}
+.vtotal{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin:4px 0 12px}
+.vtotal small{color:var(--ink3);font-size:14px}
+.vtotal b{font:800 38px/1 var(--display);letter-spacing:-.03em}
+.vassets{font-size:15px}
+.vassets td{padding:11px 0;border-top:1px solid var(--line)}
+.vassets td.r{text-align:right}
+.vassets td:first-child{font-weight:600}
+.vassets td:last-child{color:var(--ink2);width:34%}
+.vchips{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;font-size:14px;color:var(--ink2)}
+.stat.off::before{background:var(--loss)}
+.vform{display:grid;gap:8px;margin-top:16px}
+.vform label{font-weight:600;font-size:15px}
+.vform small{color:var(--ink3);font-size:13.5px}
+.vfield{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+.vfield input{flex:1 1 140px;min-width:0;width:auto;font-variant-numeric:tabular-nums}
+.vfield select{flex:0 0 auto;width:auto}
+.vfield .btn{flex:none}
+.pausewhy{margin:12px 0 4px;padding:12px 14px;border-radius:12px;font-size:14.5px;color:#F6DFA8;background:rgba(242,193,78,.08);box-shadow:inset 0 0 0 1px rgba(242,193,78,.3)}
+.pausewhy b{color:#F6CF6B}
+.livebox{margin-top:18px;padding:20px;border-radius:18px;display:grid;gap:12px;background:rgba(242,193,78,.06);box-shadow:inset 0 0 0 1px rgba(242,193,78,.34)}
+.livebox h2{font-size:20px}
+.livebox p,.livebox li{font-size:15px;color:var(--ink2);line-height:1.5}
+.livebox ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.livebox .agree{display:flex;gap:10px;align-items:flex-start;font-weight:600;font-size:15px;color:var(--ink);cursor:pointer}
+.livebox .agree input{width:18px;height:18px;margin-top:2px;flex:none;accent-color:var(--lime)}
+.livebox .liveerr{color:var(--loss)}
+.livebox .liveerr a{color:var(--ink);font-weight:600}
+.feed .meta a{color:var(--ink);font-weight:600;white-space:nowrap}
+@media (max-width:960px){.vtotal b{font-size:30px}.vfield .btn{flex:1 1 auto}}
