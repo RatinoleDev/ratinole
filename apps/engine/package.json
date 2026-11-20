@@ -15,7 +15,8 @@
     "@rationale/config": "workspace:*",
     "@rationale/db": "workspace:*",
     "bullmq": "5.81.5",
-    "ioredis": "5.11.1"
+    "ioredis": "5.11.1",
+    "viem": "2.57.16"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

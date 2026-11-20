@@ -1,5 +1,6 @@
 -- AlterTable
-ALTER TABLE "Agent" ADD COLUMN     "vault" TEXT;
+ALTER TABLE "Agent" ADD COLUMN     "pausedReason" TEXT,
+ADD COLUMN     "vault" TEXT;
 
 -- AlterTable
 ALTER TABLE "Decision" ADD COLUMN     "basisAfter" DOUBLE PRECISION,

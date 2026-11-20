@@ -13,10 +13,12 @@ import { redisConnection } from "./redis";
 import { FreshDataPendingError, hourFloor } from "./runAgent";
 import { ensureExample, runBacktest } from "./runBacktest";
 import { runAgentAndRecord, tick } from "./tick";
+import { OrderPendingError } from "./vault/chain";
+import { liveChainFromEnv } from "./vault/setup";
 
 const redis = redisConnection();
 const queue = new Queue(ENGINE_QUEUE, { connection: redisConnection() });
-const deps = { prisma, redis, funding: hyperliquidFunding };
+const deps = { prisma, redis, funding: hyperliquidFunding, chain: liveChainFromEnv() };
 
 async function handle(job: Job): Promise<unknown> {
   switch (job.name) {
@@ -27,6 +29,7 @@ async function handle(job: Job): Promise<unknown> {
         return await runAgentAndRecord(job.data.agentId, job.data.upToHour, deps);
       } catch (err) {
         if (err instanceof FreshDataPendingError) log("info", "waiting for candle", { agentId: job.data.agentId, attempt: job.attemptsMade + 1 });
+        else if (err instanceof OrderPendingError) log("info", "waiting for an order to confirm", { agentId: job.data.agentId, attempt: job.attemptsMade + 1 });
         else {
           await prisma.engineRun.updateMany({ where: { hour: new Date(job.data.upToHour) }, data: { errors: { increment: 1 } } });
           log("error", "agent job failed", { agentId: job.data.agentId, error: String(err) });
@@ -49,7 +52,7 @@ async function start() {
 
   const worker = new Worker(ENGINE_QUEUE, handle, { connection: redisConnection(), concurrency: 4 });
   worker.on("failed", (job, err) => {
-    if (!(err instanceof FreshDataPendingError)) log("warn", "job failed", { name: job?.name, id: job?.id, error: err.message });
+    if (!(err instanceof FreshDataPendingError) && !(err instanceof OrderPendingError)) log("warn", "job failed", { name: job?.name, id: job?.id, error: err.message });
   });
 
   const live = startLivePrices(redis);

@@ -5,7 +5,8 @@
 import type { Queue } from "bullmq";
 import { log } from "./log";
 import { snapshotMarkets } from "./market/snapshot";
-import { hourFloor, runAgentHours, type EngineDeps } from "./runAgent";
+import { hourFloor, runAgentHours, type AgentRunResult, type EngineDeps } from "./runAgent";
+import { runLiveAgentHour } from "./vault/runLive";
 
 export interface TickResult {
   hour: string;
@@ -46,10 +47,21 @@ export async function tick(deps: EngineDeps & { queue?: Queue }): Promise<TickRe
 
 /** Run one agent and add its counts to this hour's EngineRun row. */
 export async function runAgentAndRecord(agentId: string, upToHour: number, deps: EngineDeps) {
-  const res = await runAgentHours(agentId, upToHour, deps);
+  const res = await runOne(agentId, upToHour, deps);
   await deps.prisma.engineRun.updateMany({
     where: { hour: new Date(upToHour) },
     data: { decisions: { increment: res.decided }, late: { increment: res.late }, finishedAt: new Date() },
   });
   return res;
+}
+
+/** Paper agents catch up every hour they are owed. Live agents decide the current hour only, on-chain. */
+async function runOne(agentId: string, upToHour: number, deps: EngineDeps): Promise<AgentRunResult> {
+  const agent = await deps.prisma.agent.findUnique({ where: { id: agentId }, select: { mode: true } });
+  if (agent?.mode !== "live") return runAgentHours(agentId, upToHour, deps);
+  if (!deps.chain) {
+    log("warn", "live agent skipped: live trading is not configured on this engine", { agentId });
+    return { agentId, decided: 0, late: 0, skipped: true, reason: "live trading is not configured" };
+  }
+  return runLiveAgentHour(agentId, upToHour, { ...deps, chain: deps.chain });
 }

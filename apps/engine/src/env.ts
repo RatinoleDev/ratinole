@@ -1,4 +1,6 @@
 /** Engine configuration, read from the environment. No secrets live in code. */
+import { CHAIN } from "@rationale/config";
+
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing environment variable ${name}`);
@@ -12,4 +14,12 @@ export const env = {
   runMinute: () => Math.min(59, Math.max(0, Number(process.env.ENGINE_RUN_MINUTE ?? 1))),
   /** Most hours one agent may catch up in a run (14 days). */
   maxCatchUpHours: () => Number(process.env.ENGINE_MAX_CATCHUP_HOURS ?? 336),
+  /**
+   * Live trading. All three are needed; without them the engine runs paper agents only.
+   * The operator key signs swaps inside users' vaults. It can never withdraw. It is read here and nowhere else,
+   * and is never logged.
+   */
+  operatorKey: () => process.env.OPERATOR_PRIVATE_KEY?.trim() || null,
+  liveFactory: () => process.env.LIVE_FACTORY_ADDRESS?.trim() || null,
+  liveRpcUrl: () => process.env.LIVE_RPC_URL?.trim() || CHAIN.rpcUrl,
 };

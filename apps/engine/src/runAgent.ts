@@ -21,6 +21,7 @@ import { log } from "./log";
 import { loadCandles } from "./market/candles";
 import { attachFunding, loadFunding, type FundingFeed } from "./market/funding";
 import type { CandleFeed } from "./market/types";
+import type { VaultChain } from "./vault/chain";
 
 export interface EngineDeps {
   prisma: PrismaClient;
@@ -28,6 +29,8 @@ export interface EngineDeps {
   feeds?: CandleFeed[];
   /** Funding source; omit to run on price signals only. */
   funding?: FundingFeed | null;
+  /** Robinhood Chain access for live agents; omit and live agents are left alone. */
+  chain?: VaultChain | null;
   now?: () => number;
 }
 
@@ -43,13 +46,13 @@ export interface AgentRunResult {
 export class FreshDataPendingError extends Error {}
 
 /** A decision is "late" when stored more than this long after its hour. */
-const LATE_AFTER_MS = 30 * 60_000;
+export const LATE_AFTER_MS = 30 * 60_000;
 /** On-time runs wait (by retrying) this long for the newest candle. */
-const WAIT_FOR_CANDLE_MS = 15 * 60_000;
+export const WAIT_FOR_CANDLE_MS = 15 * 60_000;
 
 export const hourFloor = (ms: number) => Math.floor(ms / HOUR_MS) * HOUR_MS;
 
-function toState(s: {
+export function toState(s: {
   cash: number;
   qty: number;
   avgEntry: number | null;
@@ -69,7 +72,7 @@ function toState(s: {
   };
 }
 
-function stateRow(s: PositionState) {
+export function stateRow(s: PositionState) {
   return {
     cash: s.cash,
     qty: s.qty,
@@ -87,6 +90,8 @@ export async function runAgentHours(agentId: string, upToHour: number, deps: Eng
   const agent = await prisma.agent.findUnique({ where: { id: agentId }, include: { state: true } });
   if (!agent) return { agentId, decided: 0, late: 0, skipped: true, reason: "not found" };
   if (agent.status !== "active") return { agentId, decided: 0, late: 0, skipped: true, reason: agent.status };
+  // Real money never goes through the paper path.
+  if (agent.mode !== "paper") throw new Error(`Agent ${agentId} is not a paper agent`);
 
   const last = await prisma.decision.findFirst({ where: { agentId }, orderBy: { hour: "desc" }, select: { hour: true } });
   let start = Math.max(agent.owedFrom.getTime(), last ? last.hour.getTime() + HOUR_MS : 0);
@@ -227,14 +232,18 @@ export async function recomputeStats(prisma: PrismaClient): Promise<number> {
     const rows = await prisma.decision.findMany({
       where: { agentId: a.id },
       orderBy: { hour: "asc" },
-      select: { hour: true, equityAfter: true, holdingEquityAfter: true },
+      select: { hour: true, equityAfter: true, holdingEquityAfter: true, basisAfter: true },
     });
-    let peak = a.startingCash;
+    // Measured per unit of base, so a live agent's deposits and withdrawals are neither peaks nor drops. A paper
+    // agent's base never moves, which makes this the plain equity peak.
+    let peakNav = 1;
     let maxDd = 0;
     for (const r of rows) {
-      peak = Math.max(peak, r.equityAfter);
-      maxDd = Math.min(maxDd, (r.equityAfter / peak - 1) * 100);
+      const nav = r.equityAfter / (r.basisAfter ?? a.startingCash);
+      peakNav = Math.max(peakNav, nav);
+      maxDd = Math.min(maxDd, (nav / peakNav - 1) * 100);
     }
+    const peak = peakNav * a.startingCash;
     const last = rows[rows.length - 1];
     await prisma.agentState.update({
       where: { agentId: a.id },

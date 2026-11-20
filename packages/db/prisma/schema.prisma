@@ -50,6 +50,8 @@ model Agent {
   vault        String?
   /// "active" | "paused" | "archived" (deleted by the owner; decisions are kept)
   status       String      @default("active")
+  /// Set when the engine paused a live agent itself (vault emptied, access revoked, new owner), in plain words.
+  pausedReason String?
   /// Run by the Ratinole team to show live decisions; labelled "House" everywhere.
   house        Boolean     @default(false)
   archivedAt   DateTime?
