@@ -2,10 +2,11 @@
 import { HOUR_MS, maxDrawdownPct, type Plan } from "@rationale/brain";
 import { LIVE, LIVE_TOKENS, PAPER, isMarketId, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
 import type { Prisma, User } from "@rationale/db";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { agentDTO, decisionDTO } from "../dto";
-import { requireUser, sendError, type ApiDeps } from "../deps";
+import { currentUser } from "../auth";
+import { allow, requireUser, sendError, type ApiDeps } from "../deps";
 import { cleanName, pickName } from "../names";
 
 const Mode = z.enum(["paper", "live"]);
@@ -28,9 +29,11 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
    * Is this wallet's vault ready for a live agent on this market? Read from the chain every time: the vault is the
    * owner's, and they can change it whenever they like.
    */
-  async function checkVault(user: User, market: string, launching: boolean): Promise<LiveCheck> {
+  async function checkVault(user: User, market: string, launching: boolean, launchedOn?: string | null): Promise<LiveCheck> {
     const no = (status: number, error: string, message: string): LiveCheck => ({ ok: false, status, error, message });
     if (!deps.vaults) return no(409, "live_off", "Live trading is not open yet.");
+    // Every check reads the chain; one wallet may not use up the server's share of it.
+    if (!(await allow(deps.redis, `vaultcheck:${user.id}`, 12, 60))) return no(429, "rate_limited", "Too many tries. Wait a minute, then try again.");
     if (deps.env.liveTradingPaused) return no(409, "live_paused", "Live trading is paused for now. Your vault is still yours: you can withdraw at any time on the Vault page.");
     if (!isMarketId(market)) return no(409, "unsupported_market", "This market cannot be traded live yet.");
     let info;
@@ -43,6 +46,10 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
       return no(503, "chain_unavailable", "Robinhood Chain could not be reached. Try again in a moment.");
     }
     if (info.owner !== user.address.toLowerCase()) return no(409, "not_your_vault", "This vault belongs to another wallet now.");
+    // An agent only ever trades the vault it was launched on. A wallet that has moved to a new vault launches a new agent.
+    if (launchedOn && launchedOn.toLowerCase() !== info.vault) {
+      return no(409, "other_vault", "This agent was launched on a vault you no longer use. Delete it and launch a new one on your current vault.");
+    }
     if (info.operator !== operator) return no(409, "agent_access", "The agent's access to your vault is switched off. Restore it on the Vault page.");
     if (info.paused) return no(409, "vault_paused", "Your vault is paused. Resume it on the Vault page.");
     if (!info.token.tradable) return no(409, "token_not_allowed", `Your vault does not allow ${LIVE_TOKENS[market].symbol} trades.`);
@@ -50,10 +57,20 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     const price = info.token.priceUsd;
     const held = price != null && info.token.qty * price >= DUST_USD ? info.token.qty : 0;
     const equity = info.cash + held * (price ?? 0);
-    if (equity < LIVE.minVaultUsd) return no(409, "vault_empty", `Deposit at least $${LIVE.minVaultUsd} of USDG into your vault first.`);
+    if (equity < LIVE.minVaultUsd) {
+      return no(
+        409,
+        "vault_empty",
+        price == null && info.token.qty > 0
+          ? `Your vault holds less than $${LIVE.minVaultUsd} of USDG, and its ${LIVE_TOKENS[market].symbol} has no oracle price right now. Deposit USDG, or try again in a moment.`
+          : `Deposit at least $${LIVE.minVaultUsd} of USDG into your vault first.`,
+      );
+    }
+    // The cap counts everything in the vault that the agent's key could trade, not just this agent's market.
+    const total = equity + info.otherUsd;
     const cap = deps.env.liveMaxVaultUsd;
-    if (launching && cap != null && equity > cap) {
-      return no(409, "beta_cap", `While the contracts have not been audited, a vault may hold at most $${cap.toLocaleString("en-US")} when a live agent starts. Yours holds about $${Math.floor(equity).toLocaleString("en-US")}.`);
+    if (launching && cap != null && total > cap) {
+      return no(409, "beta_cap", `While the contracts have not been audited, a vault may hold at most $${cap.toLocaleString("en-US")} when a live agent starts. Yours holds about $${Math.floor(total).toLocaleString("en-US")}.`);
     }
     return { ok: true, vault: info.vault, cash: info.cash, qty: held, price, equity };
   }
@@ -158,9 +175,16 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     return out.filter((x) => x).map((x) => x!.dto);
   });
 
+  /** A paper agent runs in the open. A live agent shows a wallet's real money, so only its owner may read it. */
+  async function mayRead(req: FastifyRequest, agent: { mode: string; userId: string }): Promise<boolean> {
+    if (agent.mode !== "live") return true;
+    const user = await currentUser(deps.prisma, req);
+    return user?.id === agent.userId;
+  }
+
   app.get<{ Params: { id: string } }>("/agents/:id", async (req, reply) => {
     const found = await loadAgentDTO(req.params.id);
-    if (!found) return sendError(reply, 404, "not_found", "No such agent.");
+    if (!found || !(await mayRead(req, found.agent))) return sendError(reply, 404, "not_found", "No such agent.");
     return found.dto;
   });
 
@@ -174,7 +198,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (a.status !== body.data.status) {
       if (body.data.status === "active" && a.mode === "live") {
         // A live agent only resumes on a vault that can be traded right now.
-        const vault = await checkVault(user, a.market, false);
+        const vault = await checkVault(user, a.market, false, a.vault);
         if (!vault.ok) return sendError(reply, vault.status, vault.error, vault.message);
       }
       await deps.prisma.agent.update({
@@ -199,8 +223,8 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get<{ Params: { id: string }; Querystring: Record<string, string> }>("/agents/:id/decisions", async (req, reply) => {
     const q = DecisionsQuery.safeParse(req.query);
     if (!q.success) return sendError(reply, 400, "bad_request", "Bad query.");
-    const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, market: true, sentence: true, house: true, mode: true } });
-    if (!a) return sendError(reply, 404, "not_found", "No such agent.");
+    const a = await deps.prisma.agent.findUnique({ where: { id: req.params.id }, select: { id: true, name: true, market: true, sentence: true, house: true, mode: true, userId: true } });
+    if (!a || !(await mayRead(req, a))) return sendError(reply, 404, "not_found", "No such agent.");
     const rows = await deps.prisma.decision.findMany({
       where: { agentId: a.id, ...(q.data.before ? { hour: { lt: new Date(q.data.before) } } : {}) },
       orderBy: { hour: "desc" },

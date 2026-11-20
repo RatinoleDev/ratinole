@@ -44,6 +44,8 @@ export interface DecideContext {
   /** Where non-candle evidence came from, shown next to it (e.g. { funding: "Hyperliquid" }). */
   sources?: { funding?: string };
   regimeParams?: RegimeParams;
+  /** Real money in a vault, not a paper fill. Only changes how the guard describes the order. */
+  live?: boolean;
 }
 
 export interface StepInput {
@@ -168,6 +170,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
       regime,
       standsAsideWhenStressed: plan.filters.includes("stressed_regime"),
       costPct: ctx.costPct,
+      live: ctx.live,
     });
 
   const cadenceMs = (plan.cadenceHours ?? 0) * HOUR_MS;
@@ -229,6 +232,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
       fill: res.fill,
       sizePct: plan.sizePctOfCash,
       cadenceHours: plan.kind === "dca" ? plan.cadenceHours : undefined,
+      note: live?.note,
     };
   };
 
@@ -254,8 +258,10 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
       if (v.length) {
         situation = { type: "vetoed", side: "sell", confidence: sellConf, vetoes: v, reason };
       } else {
-        const costBasis = (state.avgEntry ?? close) * state.qty;
         const live = inp.liveFill;
+        // A sale of part of the position is measured against the cost of that part.
+        const soldQty = live && live.ok ? Math.min(live.qty, state.qty) : state.qty;
+        const costBasis = (state.avgEntry ?? close) * soldQty;
         if (live && live.ok && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
         const res = live ? (live.ok ? settleSell(state, live) : null) : applySell(state, fillPrice!, ctx.costPct);
         if (live && !live.ok) {
@@ -266,7 +272,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
           fill = res.fill;
           action = "sell";
           confidence = sellConf;
-          situation = { type: "exited", reason, fill: res.fill, realizedPct };
+          situation = { type: "exited", reason, fill: res.fill, realizedPct, note: live && live.ok ? live.note : undefined };
         }
       }
     } else if (dcaDue && allEntryHold) {

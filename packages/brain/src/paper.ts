@@ -81,7 +81,15 @@ export function applySell(s: PositionState, price: number, costPct: number): { s
  *    dollars arrived.
  */
 export type LiveFill =
-  | { ok: true; side: "buy" | "sell"; qty: number; notional: number; fee: number }
+  | {
+      ok: true;
+      side: "buy" | "sell";
+      qty: number;
+      notional: number;
+      fee: number;
+      /** Why the order was smaller than the plan asked for, as a sentence. It replaces "N% of cash" in the explanation. */
+      note?: string;
+    }
   | { ok: false; reason: string };
 
 type DoneFill = Extract<LiveFill, { ok: true }>;

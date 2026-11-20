@@ -16,6 +16,8 @@ export interface GuardInput {
   regime: Regime;
   standsAsideWhenStressed: boolean;
   costPct: number;
+  /** Real money: the order goes through a pool, and the vault checks its price. */
+  live?: boolean;
 }
 
 const p1 = (v: number) => Math.abs(v).toFixed(1);
@@ -57,7 +59,9 @@ export function runGuard(g: GuardInput): GuardCheck[] {
   checks.push({
     check: "Pool depth",
     pass: true,
-    detail: `Paper mode: filled at the next hour's opening price with a ${g.costPct}% cost.`,
+    detail: g.live
+      ? "Live: the order goes through the vault's pool, and the vault refuses a price outside its slippage limit of the Chainlink price."
+      : `Paper mode: filled at the next hour's opening price with a ${g.costPct}% cost.`,
   });
   return checks;
 }

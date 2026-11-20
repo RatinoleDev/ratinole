@@ -4,7 +4,7 @@
  * wallet, and the engine signs the agent's swaps.
  */
 import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE_STABLE, LIVE_TOKENS, VAULT_ABI, fromUnits, type Address, type MarketId } from "@rationale/config";
-import { createPublicClient, defineChain, http, zeroAddress } from "viem";
+import { createPublicClient, defineChain, http, zeroAddress, type Abi } from "viem";
 
 export interface VaultInfo {
   vault: Address;
@@ -13,8 +13,13 @@ export interface VaultInfo {
   paused: boolean;
   /** Dollars of the stablecoin in the vault. */
   cash: number;
-  /** The market token's amount, whether the vault may trade it, and its oracle price (null when the oracle has none). */
+  /**
+   * The market token's amount, whether the vault may trade it exactly as the factory set it up (allowed, same
+   * pool, same price feed), and its oracle price (null when the oracle has none).
+   */
   token: { qty: number; tradable: boolean; priceUsd: number | null };
+  /** Dollars of the other tokens this site trades that sit in the vault, as far as the oracle prices them. */
+  otherUsd: number;
 }
 
 export interface VaultReader {
@@ -27,6 +32,8 @@ export interface VaultReader {
 }
 
 const lower = (a: string) => a.toLowerCase() as Address;
+/** What `tokens(address)` returns: allowed, decimals, maxStaleness, feeTier, feed. */
+type TokenConfig = readonly [boolean, number, number, number, Address];
 
 export function viemVaultReader(opts: { rpcUrl: string; factory: string }): VaultReader {
   const chain = defineChain({
@@ -36,8 +43,23 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
     rpcUrls: { default: { http: [opts.rpcUrl] } },
     contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
   });
-  const pub = createPublicClient({ chain, transport: http(opts.rpcUrl, { timeout: 15_000, retryCount: 2 }) });
+  // Short waits: a launch must answer well inside the web server's own time limit.
+  const pub = createPublicClient({ chain, transport: http(opts.rpcUrl, { timeout: 6_000, retryCount: 1 }) });
   const factory = { address: opts.factory as Address, abi: FACTORY_ABI } as const;
+
+  /** The factory's own settings for each token: what an untouched vault has. Read once; they never change. */
+  let defaults: Promise<Map<string, { feed: string; feeTier: number }>> | null = null;
+  const factoryDefaults = () => {
+    defaults ??= pub
+      .readContract({ ...factory, functionName: "getDefaults" })
+      .then(([, tokens, feeds, , feeTiers]) => new Map(tokens.map((t, i) => [lower(t), { feed: lower(feeds[i]!), feeTier: feeTiers[i]! }])))
+      .catch((err) => {
+        defaults = null;
+        throw err;
+      });
+    return defaults;
+  };
+
   return {
     factory: lower(opts.factory),
     defaultOperator: async () => lower(await pub.readContract({ ...factory, functionName: "defaultOperator" })),
@@ -47,32 +69,58 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
     },
     async read(vault, market) {
       const token = LIVE_TOKENS[market];
-      const v = { address: vault, abi: VAULT_ABI } as const;
-      const [owner, operator, paused, tokenCfg, stableCfg, cash, qty, price] = await pub.multicall({
-        contracts: [
-          { ...v, functionName: "owner" },
-          { ...v, functionName: "operator" },
-          { ...v, functionName: "paused" },
-          { ...v, functionName: "tokens", args: [token.address] },
-          { ...v, functionName: "tokens", args: [LIVE_STABLE.address] },
-          { address: LIVE_STABLE.address, abi: ERC20_ABI, functionName: "balanceOf", args: [vault] },
-          { address: token.address, abi: ERC20_ABI, functionName: "balanceOf", args: [vault] },
-          // Reverts when the oracle is stale or the token is not allowed; that is an answer, not an error.
-          { ...v, functionName: "priceUsd", args: [token.address] },
-        ],
+      const others = Object.values(LIVE_TOKENS).filter((t) => t.address !== token.address);
+      const va = VAULT_ABI as Abi;
+      const erc = ERC20_ABI as Abi;
+      const call = (address: Address, abi: Abi, functionName: string, args: readonly unknown[] = []) => ({ address, abi, functionName, args });
+      // One batch, read by position. Calls 0 to 6 must succeed; a price may be missing (a stale oracle reverts).
+      const [expected, r] = await Promise.all([
+        factoryDefaults(),
+        pub.multicall({
+          contracts: [
+            call(vault, va, "owner"),
+            call(vault, va, "operator"),
+            call(vault, va, "paused"),
+            call(vault, va, "tokens", [token.address]),
+            call(vault, va, "tokens", [LIVE_STABLE.address]),
+            call(LIVE_STABLE.address, erc, "balanceOf", [vault]),
+            call(token.address, erc, "balanceOf", [vault]),
+            call(vault, va, "priceUsd", [token.address]),
+            ...others.flatMap((t) => [call(t.address, erc, "balanceOf", [vault]), call(vault, va, "priceUsd", [t.address])]),
+          ],
+        }),
+      ]);
+      const must = <T>(i: number): T => {
+        const x = r[i];
+        if (!x || x.status !== "success") throw new Error("The vault could not be read");
+        return x.result as T;
+      };
+      const may = <T>(i: number): T | null => (r[i]?.status === "success" ? (r[i]!.result as T) : null);
+      const tokenCfg = must<TokenConfig>(3);
+      const stableCfg = must<TokenConfig>(4);
+      const sameAsFactory = (addr: Address, cfg: TokenConfig) => {
+        const d = expected.get(lower(addr));
+        return !!d && cfg[0] && lower(cfg[4]) === d.feed && cfg[3] === d.feeTier;
+      };
+      let otherUsd = 0;
+      others.forEach((t, k) => {
+        const bal = may<bigint>(8 + 2 * k);
+        const px = may<bigint>(9 + 2 * k);
+        if (bal != null && px != null) otherUsd += fromUnits(bal, t.decimals) * fromUnits(px, 18);
       });
-      for (const r of [owner, operator, paused, tokenCfg, stableCfg, cash, qty]) if (r.status !== "success") throw new Error("The vault could not be read");
+      const price = may<bigint>(7);
       return {
         vault,
-        owner: lower(owner.result!),
-        operator: lower(operator.result!),
-        paused: paused.result!,
-        cash: fromUnits(cash.result!, LIVE_STABLE.decimals),
+        owner: lower(must<Address>(0)),
+        operator: lower(must<Address>(1)),
+        paused: must<boolean>(2),
+        cash: fromUnits(must<bigint>(5), LIVE_STABLE.decimals),
         token: {
-          qty: fromUnits(qty.result!, token.decimals),
-          tradable: tokenCfg.result![0] && stableCfg.result![0] && tokenCfg.result![3] > 0,
-          priceUsd: price.status === "success" ? fromUnits(price.result, 18) : null,
+          qty: fromUnits(must<bigint>(6), token.decimals),
+          tradable: sameAsFactory(token.address, tokenCfg) && sameAsFactory(LIVE_STABLE.address, stableCfg) && tokenCfg[1] === token.decimals && tokenCfg[3] > 0,
+          priceUsd: price == null ? null : fromUnits(price, 18),
         },
+        otherUsd,
       };
     },
   };

@@ -36,8 +36,14 @@ export const LIVE = {
   orderWindowMs: 20 * 60_000,
   /** What the guard assumes a trade costs (pool fee plus typical price impact), in percent. */
   costPct: 0.1,
+  /**
+   * How far the pool may move between the engine's dry run and the block the order lands in, in basis points.
+   * Further than this and the order is refused on-chain instead of filled at a worse price. The vault's own
+   * slippage limit against the oracle still applies on top.
+   */
+  maxDriftBps: 50,
   /** Limits suggested when a vault is created. The owner can change both at any time. */
-  defaults: { maxSlippageBps: 100, dailyLimitUsd: 500 },
+  defaults: { maxSlippageBps: 100, dailyLimitUsd: 200 },
   /** Hard bounds the vault contract accepts for slippage, in basis points. */
   slippageBps: { min: 10, max: 500 },
 } as const;

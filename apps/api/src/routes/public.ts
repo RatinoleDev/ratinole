@@ -68,8 +68,10 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
     return rows.sort((x, y) => Number(y.ranked) - Number(x.ranked) || y.edgePct - x.edgePct).slice(0, 100);
   });
 
-  app.get<{ Querystring: Record<string, string> }>("/public/decisions", async (req) => {
-    const q = LimitQuery.parse(req.query);
+  app.get<{ Querystring: Record<string, string> }>("/public/decisions", async (req, reply) => {
+    const parsed = LimitQuery.safeParse(req.query);
+    if (!parsed.success) return reply.code(400).send({ error: "bad_request", message: "Limit must be a number from 1 to 50." });
+    const q = parsed.data;
     const rows = await deps.prisma.decision.findMany({
       where: { agent: { mode: "paper", status: { not: "archived" } } },
       orderBy: [{ hour: "desc" }, { createdAt: "desc" }],
@@ -89,7 +91,8 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
       const key = `chain:operator:${deps.vaults.factory}`;
       operator = await deps.redis.get(key).catch(() => null);
       if (!operator) {
-        operator = await deps.vaults.defaultOperator().catch(() => null);
+        // Never hold the page up for this: the Vault page reads the operator from the chain itself.
+        operator = await Promise.race([deps.vaults.defaultOperator().catch(() => null), new Promise<null>((done) => setTimeout(() => done(null), 3000))]);
         if (operator) await deps.redis.set(key, operator, "EX", 300).catch(() => undefined);
       }
     }

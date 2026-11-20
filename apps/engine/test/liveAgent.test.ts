@@ -3,7 +3,7 @@
  * wrong around an order. The database is real (the test database).
  */
 import { HOUR_MS, type Plan } from "@rationale/brain";
-import { LIVE_STABLE, LIVE_TOKENS, fromUnits, toUnits, type Address } from "@rationale/config";
+import { LIVE_STABLE, LIVE_TOKENS, fromUnits, toUnits, type Address, type LiveToken } from "@rationale/config";
 import { prisma, type Prisma } from "@rationale/db";
 import type { Hex } from "viem";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -35,25 +35,46 @@ class PretendChain implements VaultChain {
   stable = usdg(1000);
   token = 0n;
   price = 2000;
+  /** What the vault still lets the operator trade today, in dollars. */
+  remainingUsd = 100_000;
   block = 100n;
   /** Every order that reached the chain. */
   done: { req: SwapRequest; out: Extract<SwapOutcome, { ok: true }> }[] = [];
   /** How many times an order was asked for. */
   asked = 0;
   refuse: string | null = null;
+  /** The chain cannot be reached while the order is being prepared: nothing is signed. */
+  unreachable = 0;
   /** "afterSend": the order lands, but the connection drops before the answer. "lost": it never reaches the chain. */
   drop: "afterSend" | "lost" | null = null;
   /** Runs after the order is prepared and before its hash is handed over, like a slow worker. */
   beforeSign: (() => Promise<void>) | null = null;
+  /** Runs while the vault is being read, like an owner acting at that moment. */
+  duringRead: (() => Promise<void>) | null = null;
   /** The chain cannot be asked about transactions right now. */
   lookupDown = false;
+  /** This connection has not seen the latest blocks yet. */
+  behind = false;
   private nonce = 0;
 
   async blockNumber() {
-    return this.block++;
+    return this.block;
   }
-  async snapshot(): Promise<VaultSnapshot> {
-    return { owner: this.owner, operator: this.vaultOperator, paused: this.paused, stable: this.stable, token: this.token, tradable: this.tradable, feeTier: this.feeTier };
+  async snapshot(_vault: Address, _token: LiveToken, atLeastBlock?: bigint): Promise<VaultSnapshot> {
+    if (this.behind && atLeastBlock != null) throw new OrderPendingError("behind");
+    await this.duringRead?.();
+    return {
+      block: this.block,
+      owner: this.owner,
+      operator: this.vaultOperator,
+      paused: this.paused,
+      stable: this.stable,
+      token: this.token,
+      tradable: this.tradable,
+      feeTier: this.feeTier,
+      remainingUsd: this.remainingUsd,
+      priceUsd: this.price,
+    };
   }
   private execute(req: SwapRequest, txHash: Hex): Extract<SwapOutcome, { ok: true }> {
     const fee = this.feeTier / 1_000_000;
@@ -63,19 +84,28 @@ class PretendChain implements VaultChain {
       amountOut = toUnits((fromUnits(req.amountIn, 6) * (1 - fee)) / this.price, WETH.decimals);
       this.stable -= req.amountIn;
       this.token += amountOut;
+      this.remainingUsd -= fromUnits(req.amountIn, 6);
     } else {
       amountOut = toUnits(fromUnits(req.amountIn, WETH.decimals) * this.price * (1 - fee), 6);
       this.token -= req.amountIn;
       this.stable += amountOut;
+      this.remainingUsd -= fromUnits(req.amountIn, WETH.decimals) * this.price;
     }
-    const out = { ok: true as const, txHash, amountIn: req.amountIn, amountOut };
+    const out = { ok: true as const, txHash, amountIn: req.amountIn, amountOut, block: ++this.block };
     this.done.push({ req, out });
     return out;
   }
   /** Like the real client: the hash exists, and is handed over, before anything is sent. */
   async swap(req: SwapRequest, onSigned: (h: Hex) => Promise<void>): Promise<SwapOutcome> {
     this.asked++;
+    if (this.unreachable > 0) {
+      this.unreachable--;
+      throw new Error("fetch failed");
+    }
     if (this.refuse) return { ok: false, reason: this.refuse };
+    // The vault itself refuses an order worth more than what is left of its daily limit.
+    const value = req.tokenIn === LIVE_STABLE.address ? fromUnits(req.amountIn, 6) : fromUnits(req.amountIn, WETH.decimals) * this.price;
+    if (value > this.remainingUsd) return { ok: false, reason: "the vault's daily trading limit is used up" };
     const txHash = `0x${(++this.nonce).toString(16).padStart(64, "0")}` as Hex;
     await this.beforeSign?.();
     await onSigned(txHash);
@@ -309,7 +339,7 @@ describe.skipIf(!hasDb)("live agents", () => {
       [(c) => void ((c.stable = 0n), (c.token = 0n)), /vault is empty/],
       [(c) => void (c.vaultOperator = "0x0000000000000000000000000000000000000000"), /access to the vault was revoked/],
       [(c) => void (c.owner = "0x9999999999999999999999999999999999999999"), /belongs to another wallet/],
-      [(c) => void (c.tradable = false), /no longer allows WETH/],
+      [(c) => void (c.tradable = false), /settings for WETH were changed/],
     ];
     for (const [breakIt, reason] of cases) {
       await wipe();
@@ -366,6 +396,211 @@ describe.skipIf(!hasDb)("live agents", () => {
     // The earlier trade is a trade, not a deposit or a withdrawal.
     expect(ds[1]).toMatchObject({ action: "hold", flowUsd: null });
     expect(chain.asked).toBe(1);
+  });
+
+  it("books an order that went through even if the run that placed it never wrote its decision, and does not buy again", async () => {
+    const chain = new PretendChain();
+    chain.drop = "afterSend";
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
+    chain.drop = null;
+    // A later attempt found the receipt and closed the order, then died before storing the decision.
+    const open = await prisma.liveOrder.findFirstOrThrow();
+    await prisma.liveOrder.update({ where: { id: open.id }, data: { status: "done", amountOut: chain.done[0]!.out.amountOut.toString() } });
+
+    await run(chain, agent.id, H0 + HOUR_MS);
+    const ds = await decisions(agent.id);
+    expect(ds.map((d) => d.hour.getTime())).toEqual([H0, H0 + HOUR_MS]);
+    expect(ds[0]).toMatchObject({ action: "buy", txHash: chain.done[0]!.out.txHash, fillNotional: 100 });
+    expect(ds[1]).toMatchObject({ action: "hold", flowUsd: null });
+    // The second hour sees the position the first order bought: it holds, and does not buy a second time.
+    expect(ds[1]!.explanation).toMatch(/^Hold\. In position/);
+    expect(ds[1]!.qtyAfter).toBeCloseTo(fromUnits(chain.done[0]!.out.amountOut, 18), 12);
+    expect(chain.asked).toBe(1);
+  });
+
+  it("books an interrupted order as it happened when the decision worked out later no longer asks for it", async () => {
+    const chain = new PretendChain();
+    // No buy is due: the plan bought an hour ago. An order of this hour went through all the same.
+    const agent = await launch(chain);
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { lastBuyAt: new Date(H0 - HOUR_MS) } });
+    chain.price = open(H0);
+    const amountIn = usdg(100);
+    const txHash = `0x${"7".repeat(64)}` as Hex;
+    const amountOut = toUnits((100 * (1 - 0.0005)) / chain.price, 18);
+    chain.stable -= amountIn;
+    chain.token += amountOut;
+    chain.done.push({ req: { vault: VAULT, tokenIn: LIVE_STABLE.address, tokenOut: WETH.address, feeTier: 500, amountIn }, out: { ok: true, txHash, amountIn, amountOut, block: 101n } });
+    await prisma.liveOrder.create({
+      data: { agentId: agent.id, hour: new Date(H0), side: "buy", vault: VAULT, tokenIn: LIVE_STABLE.address, tokenOut: WETH.address, amountIn: amountIn.toString(), fromBlock: "100", txHash, status: "pending", createdAt: new Date(H0 + 60_000) },
+    });
+    await run(chain, agent.id, H0, 4);
+    const [d] = await decisions(agent.id);
+    expect(d).toMatchObject({ action: "buy", txHash, fillNotional: 100 });
+    expect(d!.explanation).toMatch(/^Buy\. This order was placed earlier in the hour by a run that was interrupted/);
+    expect(d!.cashAfter).toBeCloseTo(900, 6);
+    expect(d!.qtyAfter).toBeCloseTo(fromUnits(amountOut, 18), 12);
+    expect(chain.asked).toBe(0);
+  });
+
+  it("sells as much as the vault's daily limit allows when the whole position is over it, and the rest later", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0);
+    const bought = chain.token;
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: open(H0 + HOUR_MS) * 1.3 } });
+    chain.remainingUsd = 40; // the position is worth about $100
+    await run(chain, agent.id, H0 + HOUR_MS);
+    const d = (await decisions(agent.id))[1]!;
+    expect(d.action).toBe("sell");
+    expect(chain.done[1]!.req.amountIn).toBeLessThan(bought);
+    expect(fromUnits(chain.done[1]!.req.amountIn, 18) * open(H0 + HOUR_MS)).toBeLessThanOrEqual(40);
+    expect(d.qtyAfter).toBeGreaterThan(0);
+    expect(d.explanation).toMatch(/allowed only part of the position to be sold/);
+    // Next hour the limit has room again: the rest goes.
+    chain.remainingUsd = 100_000;
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: open(H0 + 2 * HOUR_MS) * 1.3 } });
+    await run(chain, agent.id, H0 + 2 * HOUR_MS);
+    expect((await decisions(agent.id))[2]).toMatchObject({ action: "sell", qtyAfter: 0 });
+    expect(chain.token).toBe(0n);
+  });
+
+  it("makes a buy smaller to fit the daily limit, and says so; with no room left it does not send at all", async () => {
+    const chain = new PretendChain();
+    chain.remainingUsd = 50;
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0);
+    const [d] = await decisions(agent.id);
+    expect(d!.action).toBe("buy");
+    expect(d!.fillNotional).toBeCloseTo(49, 6);
+    expect(d!.explanation).toMatch(/Bought \$49\.00 of ETH at \$[\d,.]+\. The vault's daily trading limit made this order smaller than planned\.$/);
+
+    await wipe();
+    const none = new PretendChain();
+    none.remainingUsd = 0.5;
+    const second = await launch(none);
+    await run(none, second.id, H0);
+    expect(none.asked).toBe(0);
+    expect((await decisions(second.id))[0]).toMatchObject({ action: "hold", execError: "the vault's daily trading limit is used up" });
+  });
+
+  it("when the chain cannot be reached before anything is signed, the hour is tried again, not written off", async () => {
+    const chain = new PretendChain();
+    chain.unreachable = 1;
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(/fetch failed/);
+    expect(await decisions(agent.id)).toHaveLength(0);
+    expect(await prisma.liveOrder.count()).toBe(0);
+    await run(chain, agent.id, H0, 3);
+    expect(chain.done).toHaveLength(1);
+    expect((await decisions(agent.id))[0]).toMatchObject({ action: "buy", execError: null });
+  });
+
+  it("does not place an order smaller than its minimum, so a buy can never fall under the dust line", async () => {
+    const chain = new PretendChain();
+    chain.stable = usdg(8); // a tenth of it would be 80 cents
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0);
+    expect(chain.asked).toBe(0);
+    const [d] = await decisions(agent.id);
+    expect(d).toMatchObject({ action: "hold", execError: "the order would be smaller than the $1.00 minimum" });
+  });
+
+  it("tokens the owner deposits count as bought at that hour's price", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0);
+    const own = fromUnits(chain.token, 18);
+    const entry = (await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } })).avgEntry!;
+    chain.token += toUnits(1, 18); // the owner sends a whole ETH to the vault
+    await run(chain, agent.id, H0 + HOUR_MS);
+    const d = (await decisions(agent.id))[1]!;
+    const mark = open(H0 + HOUR_MS);
+    expect(d.flowUsd).toBeCloseTo(mark, 4);
+    const state = await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } });
+    expect(state.avgEntry).toBeCloseTo((entry * own + mark * 1) / (own + 1), 6);
+    // No stop or target is hit by the deposit itself.
+    expect(d.action).toBe("hold");
+  });
+
+  it("does not send an order if the owner paused or deleted the agent while the vault was being read", async () => {
+    for (const status of ["paused", "archived"]) {
+      await wipe();
+      const chain = new PretendChain();
+      const agent = await launch(chain);
+      chain.duringRead = async () => void (await prisma.agent.update({ where: { id: agent.id }, data: { status } }));
+      expect(await run(chain, agent.id, H0)).toMatchObject({ skipped: true, reason: status });
+      expect(chain.asked).toBe(0);
+      expect(await decisions(agent.id)).toHaveLength(0);
+    }
+  });
+
+  it("stopping an agent never brings a deleted one back", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    chain.stable = 0n;
+    chain.duringRead = async () => void (await prisma.agent.update({ where: { id: agent.id }, data: { status: "archived" } }));
+    await run(chain, agent.id, H0);
+    expect(await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } })).toMatchObject({ status: "archived", pausedReason: null });
+  });
+
+  it("books an order first, then stops, when the agent's access was revoked right after the order", async () => {
+    const chain = new PretendChain();
+    chain.drop = "afterSend";
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
+    chain.drop = null;
+    chain.vaultOperator = "0x0000000000000000000000000000000000000000";
+    await run(chain, agent.id, H0, 4);
+    expect((await decisions(agent.id))[0]).toMatchObject({ action: "buy", txHash: chain.done[0]!.out.txHash });
+    expect(await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } })).toMatchObject({ status: "paused", pausedReason: expect.stringMatching(/access to the vault was revoked/) });
+  });
+
+  it("waits for a connection that has not caught up with the order's block instead of reading an old vault", async () => {
+    const chain = new PretendChain();
+    chain.drop = "afterSend";
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
+    chain.drop = null;
+    chain.behind = true;
+    await expect(run(chain, agent.id, H0, 3)).rejects.toThrow(OrderPendingError);
+    expect(await decisions(agent.id)).toHaveLength(0);
+    chain.behind = false;
+    await run(chain, agent.id, H0, 4);
+    expect((await decisions(agent.id))[0]).toMatchObject({ action: "buy", flowUsd: null });
+  });
+
+  it("two runs of the same agent at once place one order", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    chain.price = open(H0);
+    const deps = { prisma, feeds, chain, now: at(H0) };
+    const both = await Promise.all([runLiveAgentHour(agent.id, H0, deps), runLiveAgentHour(agent.id, H0, deps)]);
+    expect(both.filter((r) => r.decided === 1)).toHaveLength(1);
+    expect(chain.asked).toBe(1);
+    expect(await decisions(agent.id)).toHaveLength(1);
+  });
+
+  it("never goes back to an hour older than the last one decided", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0 + HOUR_MS);
+    expect(await run(chain, agent.id, H0)).toMatchObject({ skipped: true, reason: "not owed yet" });
+    // Even if the record of what is owed were wrong, the stored position refuses the older hour.
+    await prisma.agent.update({ where: { id: agent.id }, data: { owedFrom: new Date(H0) } });
+    expect(await run(chain, agent.id, H0)).toMatchObject({ skipped: true, reason: "older than the last decision" });
+    expect(chain.asked).toBe(1);
+    expect(await decisions(agent.id)).toHaveLength(1);
+  });
+
+  it("stops counting hours it will never trade as owed", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    await run(chain, agent.id, H0);
+    // The engine was down for three hours.
+    await run(chain, agent.id, H0 + 4 * HOUR_MS);
+    expect((await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } })).owedFrom.getTime()).toBe(H0 + 4 * HOUR_MS);
+    expect(await decisions(agent.id)).toHaveLength(2);
   });
 
   it("the paper runner refuses a live agent, and the tick sends it to the live runner", async () => {

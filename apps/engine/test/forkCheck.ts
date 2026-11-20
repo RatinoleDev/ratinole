@@ -35,8 +35,8 @@ async function main() {
   if (!/hardhat/i.test(await rpc<string>("web3_clientVersion"))) throw new Error("Not a local Hardhat fork. Stopping.");
   if (!/test/i.test(process.env.DATABASE_URL ?? "")) throw new Error("DATABASE_URL must be the test database: this check wipes it.");
   const text = readFileSync(process.env.FORK_SETUP ?? "", "utf8");
-  const cfg = JSON.parse(text.slice(text.indexOf("{"))) as { vault: Address; owner: Address; operator: Address; operatorKey: Hex };
-  const chain = viemVaultChain({ rpcUrl: RPC, privateKey: cfg.operatorKey, confirmTimeoutMs: 30_000 });
+  const cfg = JSON.parse(text.slice(text.indexOf("{"))) as { vault: Address; owner: Address; operator: Address; operatorKey: Hex; factory: Address };
+  const chain = viemVaultChain({ rpcUrl: RPC, factory: cfg.factory, privateKey: cfg.operatorKey, confirmTimeoutMs: 30_000 });
   const vault = cfg.vault;
   const WETH = LIVE_TOKENS.ETH;
   const BTC = LIVE_TOKENS.BTC;
@@ -54,12 +54,12 @@ async function main() {
 
   console.log("\nChain client");
   check("the engine's key is the vault's operator", chain.operator === cfg.operator.toLowerCase());
-  const s0 = await chain.snapshot(vault, WETH.address);
+  const s0 = await chain.snapshot(vault, WETH);
   check("the vault is read: owner, operator, tradable, pool fee", s0.owner === cfg.owner.toLowerCase() && s0.operator === chain.operator && s0.tradable && s0.feeTier === 100, `USDG ${fromUnits(s0.stable, 6)}`);
 
   let handed = "" as Hex;
   const b1 = await buy(WETH.address, s0.feeTier, 50, async (h) => void (handed = h));
-  const s1 = await chain.snapshot(vault, WETH.address);
+  const s1 = await chain.snapshot(vault, WETH);
   check("a WETH buy goes through the real pool", b1.ok, b1.ok ? `${fromUnits(b1.amountOut, 18)} WETH for $50` : b1.reason);
   check("the hash written down before sending is the transaction that landed", b1.ok && handed === b1.txHash);
   check("the vault moved by exactly the amounts in the receipt", b1.ok && s0.stable - s1.stable === b1.amountIn && s1.token - s0.token === b1.amountOut);
@@ -68,22 +68,22 @@ async function main() {
 
   const n0 = await nonce();
   const withdrawn = await buy(WETH.address, s0.feeTier, 20, async () => Promise.reject(new Error("order withdrawn"))).then(() => "sent", (e: Error) => e.message);
-  const s2 = await chain.snapshot(vault, WETH.address);
+  const s2 = await chain.snapshot(vault, WETH);
   check("an order withdrawn after signing is never sent", withdrawn === "order withdrawn" && s2.stable === s1.stable && (await nonce()) === n0);
 
   const sell = await chain.swap({ vault, tokenIn: WETH.address, tokenOut: LIVE_STABLE.address, feeTier: s0.feeTier, amountIn: s2.token }, async () => undefined);
-  const s3 = await chain.snapshot(vault, WETH.address);
+  const s3 = await chain.snapshot(vault, WETH);
   check("selling the whole WETH balance leaves none", sell.ok && s3.token === 0n, sell.ok ? `$${fromUnits(sell.amountOut, 6)} back` : sell.reason);
 
   console.log("\nBTC market (cbBTC, 8 decimals)");
-  const c0 = await chain.snapshot(vault, BTC.address);
+  const c0 = await chain.snapshot(vault, BTC);
   check("cbBTC is tradable in the vault at its pinned pool", c0.tradable && c0.feeTier === 500, `fee tier ${c0.feeTier}`);
   const cb = await buy(BTC.address, c0.feeTier, 40);
-  const c1 = await chain.snapshot(vault, BTC.address);
+  const c1 = await chain.snapshot(vault, BTC);
   const btcPrice = cb.ok ? fromUnits(cb.amountIn, 6) / fromUnits(cb.amountOut, BTC.decimals) : 0;
   check("a cbBTC buy goes through, at a believable price", cb.ok && btcPrice > 10_000 && btcPrice < 1_000_000, cb.ok ? `${fromUnits(cb.amountOut, 8)} cbBTC, $${btcPrice.toFixed(0)} each` : cb.reason);
   const cs = await chain.swap({ vault, tokenIn: BTC.address, tokenOut: LIVE_STABLE.address, feeTier: c0.feeTier, amountIn: c1.token }, async () => undefined);
-  check("selling the whole cbBTC balance leaves none", cs.ok && (await chain.snapshot(vault, BTC.address)).token === 0n, cs.ok ? `$${fromUnits(cs.amountOut, 6)} back` : cs.reason);
+  check("selling the whole cbBTC balance leaves none", cs.ok && (await chain.snapshot(vault, BTC)).token === 0n, cs.ok ? `$${fromUnits(cs.amountOut, 6)} back` : cs.reason);
 
   console.log("\nRefusals are caught before anything is signed, in plain words");
   const va = VAULT_ABI as Abi;
@@ -96,7 +96,7 @@ async function main() {
   await asOwner(vault, va, "setLimits", [100, parseUnits("5000", 18)]);
   await asOwner(vault, va, "setOperator", [zeroAddress]);
   check("revoked access", reasonOf(await buy(WETH.address, 100, 5)) === "the agent's access to the vault was revoked");
-  check("a revoked vault reads as revoked", (await chain.snapshot(vault, WETH.address)).operator !== chain.operator);
+  check("a revoked vault reads as revoked", (await chain.snapshot(vault, WETH)).operator !== chain.operator);
   await asOwner(vault, va, "setOperator", [chain.operator]);
   // More than the balance, but inside the daily limit, so it is the balance that stops it.
   check("more than the vault holds", reasonOf(await buy(WETH.address, 100, 1000)) === "the vault holds less than the order needed");
@@ -110,7 +110,7 @@ async function main() {
   await prisma.agent.deleteMany();
   await prisma.session.deleteMany();
   await prisma.user.deleteMany();
-  const start = await chain.snapshot(vault, WETH.address);
+  const start = await chain.snapshot(vault, WETH);
   const cash0 = fromUnits(start.stable, 6);
   const plan: Plan = { markets: ["ETH"], kind: "dca", entry: [], cadenceHours: 24, sizePctOfCash: 10, exit: { stopLossPct: 15 }, filters: [] };
   const h = Math.floor(Date.now() / HOUR_MS) * HOUR_MS - 4 * HOUR_MS;
@@ -126,7 +126,7 @@ async function main() {
   const decisions = () => prisma.decision.findMany({ where: { agentId: agent.id }, orderBy: { hour: "asc" } });
 
   await run(h);
-  const afterBuy = await chain.snapshot(vault, WETH.address);
+  const afterBuy = await chain.snapshot(vault, WETH);
   const [d1] = await decisions();
   check("hour 1: buys a tenth of the cash, and stores the transaction", d1?.action === "buy" && !!d1.txHash && near(d1.fillNotional ?? 0, cash0 / 10, 0.01), d1?.explanation);
   check("hour 1: the stored position is the vault's", !!d1 && near(d1.cashAfter, fromUnits(afterBuy.stable, 6), 1e-6) && near(d1.qtyAfter, fromUnits(afterBuy.token, 18), 1e-12));
@@ -143,7 +143,7 @@ async function main() {
   check("the owner deposits $30 of USDG", await asOwner(LIVE_STABLE.address, ERC20_ABI as Abi, "transfer", [vault, toUnits(30, 6)]));
   await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: (d1!.fillPrice ?? 0) * 1.4 } }); // far above the market: the stop is hit
   await run(h + 2 * HOUR_MS);
-  const afterSell = await chain.snapshot(vault, WETH.address);
+  const afterSell = await chain.snapshot(vault, WETH);
   const d3 = (await decisions())[2];
   check("hour 3: the deposit is a flow of plus $30", near(d3?.flowUsd ?? 0, 30, 0.01), `flow ${d3?.flowUsd?.toFixed(2)}`);
   check("hour 3: the stop sells the whole position through the real pool", d3?.action === "sell" && !!d3.txHash && afterSell.token === 0n && d3.qtyAfter === 0, d3?.explanation);

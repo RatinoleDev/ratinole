@@ -1,4 +1,5 @@
 /** Builds the engine's chain access from the environment, or returns null when live trading is not set up. */
+import type { Address } from "@rationale/config";
 import type { Hex } from "viem";
 import { env } from "../env";
 import { log } from "../log";
@@ -20,7 +21,17 @@ export function liveChainFromEnv(): VaultChain | null {
     log("error", "live trading is off: OPERATOR_PRIVATE_KEY is not a 0x-prefixed 32-byte key");
     return null;
   }
-  const chain = viemVaultChain({ rpcUrl: env.liveRpcUrl(), privateKey: key as Hex });
-  log("info", "live trading is on", { operator: chain.operator, factory });
-  return chain;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(factory)) {
+    log("error", "live trading is off: LIVE_FACTORY_ADDRESS is not an address");
+    return null;
+  }
+  try {
+    const chain = viemVaultChain({ rpcUrl: env.liveRpcUrl(), factory: factory as Address, privateKey: key as Hex });
+    log("info", "live trading is on", { operator: chain.operator, factory });
+    return chain;
+  } catch {
+    // Never print what went wrong here: the message could carry the key itself.
+    log("error", "live trading is off: OPERATOR_PRIVATE_KEY is not a usable key");
+    return null;
+  }
 }

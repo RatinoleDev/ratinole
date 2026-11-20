@@ -239,7 +239,9 @@ export async function recomputeStats(prisma: PrismaClient): Promise<number> {
     let peakNav = 1;
     let maxDd = 0;
     for (const r of rows) {
-      const nav = r.equityAfter / (r.basisAfter ?? a.startingCash);
+      const base = r.basisAfter ?? a.startingCash;
+      if (!(base > 0)) continue;
+      const nav = r.equityAfter / base;
       peakNav = Math.max(peakNav, nav);
       maxDd = Math.min(maxDd, (nav / peakNav - 1) * 100);
     }

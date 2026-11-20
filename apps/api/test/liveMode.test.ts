@@ -36,7 +36,7 @@ function pretendVaults(owner: string) {
   const state = {
     has: true,
     down: false,
-    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 } } as VaultInfo,
+    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0 } as VaultInfo,
   };
   const reader: VaultReader = {
     factory: FACTORY,
@@ -185,7 +185,7 @@ describe.skipIf(!hasDb)("live mode", () => {
     const s = await withVault();
     const { id } = (await s.launch()).json();
     await prisma.agent.update({ where: { id }, data: { status: "paused", pausedReason: "The vault is empty, so this agent was stopped. Deposit, then resume it." } });
-    const get = async () => (await app.inject({ method: "GET", url: `/api/agents/${id}` })).json();
+    const get = async () => (await app.inject({ method: "GET", url: `/api/agents/${id}`, headers: { cookie: s.cookie } })).json();
     expect(await get()).toMatchObject({ status: "paused", pausedReason: expect.stringMatching(/vault is empty/) });
 
     const resume = () => app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } });
@@ -195,6 +195,69 @@ describe.skipIf(!hasDb)("live mode", () => {
     // Over the launch cap is fine for an agent that is already running: the cap is for starting.
     s.vault.info.cash = 900;
     expect((await resume()).json()).toMatchObject({ status: "active", pausedReason: null });
+  });
+
+  it("only the owner can read a live agent or its decisions; paper agents stay open", async () => {
+    const s = await withVault();
+    const live = (await s.launch()).json();
+    const paper = (await s.launch({ mode: "paper" })).json();
+    const other = await signIn(app);
+    for (const cookie of [undefined, other.cookie]) {
+      const headers = cookie ? { cookie } : {};
+      for (const url of [`/api/agents/${live.id}`, `/api/agents/${live.id}/decisions`]) {
+        const res = await app.inject({ method: "GET", url, headers });
+        expect(res.statusCode, url).toBe(404);
+        expect(res.body).not.toContain(VAULT);
+      }
+      expect((await app.inject({ method: "GET", url: `/api/agents/${paper.id}`, headers })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: `/api/agents/${paper.id}/decisions`, headers })).statusCode).toBe(200);
+    }
+    // Another wallet cannot pause, resume or delete it either.
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${live.id}`, headers: { cookie: other.cookie }, payload: { status: "paused" } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "DELETE", url: `/api/agents/${live.id}`, headers: { cookie: other.cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/agents/${live.id}`, headers: { cookie: s.cookie } })).json()).toMatchObject({ id: live.id, mode: "live", status: "active", vault: VAULT });
+    expect((await app.inject({ method: "GET", url: `/api/agents/${live.id}/decisions`, headers: { cookie: s.cookie } })).statusCode).toBe(200);
+    // The public lists never carry it.
+    for (const url of ["/api/public/leaderboard", "/api/public/feed"]) {
+      expect((await app.inject({ method: "GET", url })).body).not.toContain(live.id);
+    }
+  });
+
+  it("counts every token in the vault towards the launch cap, not only this agent's market", async () => {
+    const s = await withVault();
+    s.vault.info.cash = 100;
+    s.vault.info.otherUsd = 450; // cbBTC the ETH agent's key could also trade
+    const res = await s.launch();
+    expect(res.json()).toMatchObject({ error: "beta_cap" });
+    expect(res.json().message).toMatch(/Yours holds about \$550/);
+    s.vault.info.otherUsd = 350;
+    // The agent is still measured against its own market only.
+    expect((await s.launch()).json()).toMatchObject({ mode: "live", startingCash: 100 });
+  });
+
+  it("an agent only resumes on the vault it was launched on", async () => {
+    const s = await withVault();
+    const { id } = (await s.launch()).json();
+    await prisma.agent.update({ where: { id }, data: { status: "paused", vault: "0x7a11700000000000000000000000000000000002" } });
+    const res = await app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "other_vault" });
+    expect((await prisma.agent.findUniqueOrThrow({ where: { id } })).status).toBe("paused");
+  });
+
+  it("limits how often one wallet can make the server read the chain", async () => {
+    const s = await withVault();
+    s.vault.has = false;
+    const codes: number[] = [];
+    for (let i = 0; i < 14; i++) codes.push((await s.launch()).statusCode);
+    expect(codes.slice(0, 12).every((c) => c === 409)).toBe(true);
+    expect(codes.slice(12)).toEqual([429, 429]);
+    // Another wallet is not held back by it.
+    const other = await signIn(app);
+    const user = await prisma.user.findUniqueOrThrow({ where: { address: other.address } });
+    const bt = await doneBacktest(user.id);
+    const res = await app.inject({ method: "POST", url: "/api/agents", headers: { cookie: other.cookie }, payload: { backtestId: bt.id, mode: "live" } });
+    expect(res.json()).toMatchObject({ error: "no_vault" });
   });
 
   it("never adds virtual and real money together, and divides each hour by the base it had", async () => {

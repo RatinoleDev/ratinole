@@ -11,14 +11,14 @@ import type { Action, EvidenceItem, GuardCheck, PlanKind } from "./types";
 
 export type Situation =
   | { type: "stale"; detail: string }
-  | { type: "entered"; readings: ConditionReading[]; fill: Fill; sizePct: number; cadenceHours?: number }
+  | { type: "entered"; readings: ConditionReading[]; fill: Fill; sizePct: number; cadenceHours?: number; note?: string }
   | { type: "waiting"; unmet: ConditionReading[]; buyConfidence: number }
   | { type: "weak"; buyConfidence: number; threshold: number; weakest?: EvidenceItem }
   | { type: "vetoed"; side: "buy" | "sell"; confidence: number; vetoes: GuardCheck[]; reason?: string }
   | { type: "not_due"; hoursLeft: number }
   | { type: "no_cash" }
   | { type: "holding"; pnlPct: number; exits: string[] }
-  | { type: "exited"; reason: string; fill: Fill; realizedPct: number }
+  | { type: "exited"; reason: string; fill: Fill; realizedPct: number; note?: string }
   /** Live trading only: the agent wanted to trade, but no order went through. Nothing changed. */
   | { type: "not_executed"; side: "buy" | "sell"; confidence: number; why: string; reason?: string };
 
@@ -72,7 +72,7 @@ export function explain(x: ExplainInput): string {
       const why = s.cadenceHours
         ? `Scheduled purchase (${cadenceText(s.cadenceHours)})${s.readings.length ? `, and ${lowerFirst(joinAnd(s.readings.map(conditionText)))}` : ""}.`
         : `${joinAnd(s.readings.map(conditionText))}.`;
-      text = `Buy. ${why} Confidence ${x.confidence}%. Bought ${usd(s.fill.notional)} of ${x.market} at ${usd(s.fill.price)}, ${s.sizePct}% of cash.`;
+      text = `Buy. ${why} Confidence ${x.confidence}%. Bought ${usd(s.fill.notional)} of ${x.market} at ${usd(s.fill.price)}${s.note ? `. ${s.note}` : `, ${s.sizePct}% of cash.`}`;
       break;
     }
     case "waiting":
@@ -98,7 +98,7 @@ export function explain(x: ExplainInput): string {
       text = `Hold. In position at ${pct(s.pnlPct)} since buying.${s.exits.length ? ` ${s.exits.join(", ")}.` : ""}`;
       break;
     case "exited":
-      text = `Sell. ${s.reason} Sold ${qtyText(s.fill.qty)} ${x.market} at ${usd(s.fill.price)}, ${pct(s.realizedPct)} on the trade after costs.`;
+      text = `Sell. ${s.reason} Sold ${qtyText(s.fill.qty)} ${x.market} at ${usd(s.fill.price)}, ${pct(s.realizedPct)} on the trade after costs.${s.note ? ` ${s.note}` : ""}`;
       break;
     case "not_executed": {
       const what = s.side === "buy" ? `The entry rules are met (confidence ${s.confidence}%)` : (s.reason ?? "The exit rule is met");
