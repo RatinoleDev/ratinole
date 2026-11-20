@@ -11,7 +11,7 @@ import type { Connector } from "wagmi";
 import { useConnect } from "wagmi";
 import { KNOWN_WALLETS, isMobile, type KnownWallet } from "../../lib/wallets";
 
-export type PickerStage = { name: string; step: "connect" | "sign" } | null;
+export type PickerStage = { name: string; step: "connect" | "network" | "sign" } | null;
 
 function knownFor(c: Connector): KnownWallet | undefined {
   return KNOWN_WALLETS.find((w) => w.rdns === c.id || w.name.toLowerCase() === c.name.toLowerCase());
@@ -83,7 +83,7 @@ export function WalletPicker({
                       {icon ? <img src={icon} alt="" width={36} height={36} /> : <span className="wpick-noicon" aria-hidden="true" />}
                       <span className="wpick-name">{name}</span>
                       <span className="wpick-tag">
-                        {busy ? (stage?.step === "sign" ? "Sign in your wallet…" : "Opening…") : "Detected"}
+                        {busy ? (stage?.step === "sign" ? "Sign in your wallet…" : stage?.step === "network" ? "Adding Robinhood Chain…" : "Opening…") : "Detected"}
                       </span>
                     </button>
                   </li>

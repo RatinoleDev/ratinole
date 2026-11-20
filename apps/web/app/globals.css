@@ -875,3 +875,5 @@ body:has(#landing){background:#070708}
 @keyframes wpfade{from{opacity:0}}
 @keyframes wprise{from{opacity:0;transform:translateY(16px) scale(.98)}}
 @media (prefers-reduced-motion:reduce){.wpick-back,.wpick{animation:none}}
+.netswitch{background:#FFF4D6!important;color:#7A4B00!important;box-shadow:inset 0 0 0 1px #F2C14E!important;margin-right:8px}
+.netswitch:hover{background:#FFE9AE!important}

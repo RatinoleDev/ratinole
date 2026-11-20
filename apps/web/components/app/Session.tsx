@@ -4,8 +4,9 @@ import { BRAND_NAME, CHAIN, type MeDTO } from "@rationale/config";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import { createSiweMessage } from "viem/siwe";
-import { useAccount, useConnect, useDisconnect, useSignMessage, type Connector } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSignMessage, useSwitchChain, type Connector } from "wagmi";
 import { ApiFailure, api, post } from "../../lib/api";
+import { robinhoodChain } from "../../lib/wagmi";
 import { useToast } from "../Toast";
 import { WalletPicker, type PickerStage } from "./WalletPicker";
 
@@ -39,7 +40,8 @@ function isUserRejection(e: unknown): boolean {
 export function SessionProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const qc = useQueryClient();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, connector: activeConnector } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
   const { connectAsync } = useConnect();
   const { disconnectAsync } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
@@ -62,19 +64,57 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     staleTime: 30_000,
   });
 
+  /**
+   * Moves the wallet to Robinhood Chain, adding the network first when the wallet does not know it (wagmi sends
+   * wallet_addEthereumChain with our chain's name, RPC, explorer and currency). Sign-in does not depend on it:
+   * if the wallet refuses or cannot add the network, the user is told and sign-in carries on.
+   */
+  const toRobinhoodChain = useCallback(
+    async (connector: Connector | undefined, label: string) => {
+      if (!connector) return;
+      try {
+        if ((await connector.getChainId()) === robinhoodChain.id) return;
+      } catch {
+        return;
+      }
+      setStage({ name: label, step: "network" });
+      const attempt = () => switchChainAsync({ chainId: robinhoodChain.id, connector });
+      try {
+        await attempt();
+      } catch (e) {
+        // Some wallets add the network without switching to it; ask once more in that case only.
+        const addedOnly = /after adding network/i.test(String((e as { message?: string })?.message ?? ""));
+        try {
+          if (!addedOnly) throw e;
+          await attempt();
+        } catch (e2) {
+          toast(
+            isUserRejection(e2) && !addedOnly
+              ? `Switch ${label} to ${robinhoodChain.name} before trading. Signing in continues.`
+              : `${label} could not switch to ${robinhoodChain.name}. You can sign in; add the network in your wallet before trading.`,
+          );
+        }
+      }
+    },
+    [switchChainAsync, toast],
+  );
+
   /** Connect with `connector` (or the wallet already connected) and sign the sign-in message. */
   const signInWith = useCallback(
     async (connector: Connector | null, label: string): Promise<boolean> => {
       setSigningIn(true);
       try {
         let account = isConnected ? address : undefined;
+        let used = isConnected ? activeConnector : undefined;
         if (!account) {
           if (!connector) throw new Error("No wallet");
           setStage({ name: label, step: "connect" });
           const res = await connectAsync({ connector });
           account = res.accounts[0];
+          used = connector;
         }
         if (!account) throw new Error("No account");
+        await toRobinhoodChain(used, label);
         setStage({ name: label, step: "sign" });
         const { nonce } = await api<{ nonce: string }>("/auth/nonce");
         const message = createSiweMessage({
@@ -106,7 +146,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setStage(null);
       }
     },
-    [address, connectAsync, isConnected, qc, signMessageAsync, toast],
+    [activeConnector, address, connectAsync, isConnected, qc, signMessageAsync, toRobinhoodChain, toast],
   );
 
   const closePicker = useCallback((ok: boolean) => {

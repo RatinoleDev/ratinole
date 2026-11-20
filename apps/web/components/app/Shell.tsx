@@ -7,6 +7,8 @@ import { BrandMark, BrandWordmark } from "../Brand";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { shortAddress } from "../../lib/format";
 import { useToast } from "../Toast";
+import { useAccount, useSwitchChain } from "wagmi";
+import { robinhoodChain } from "../../lib/wagmi";
 import { useSession } from "./Session";
 
 const NAV = [
@@ -19,6 +21,28 @@ const NAV = [
 ];
 /** Pages reached from the wallet menu rather than the rail. */
 const HIDDEN = [{ href: "/app/settings", label: "Settings" }];
+
+/** Shown while the connected wallet is on another network: one click switches (and adds) Robinhood Chain. */
+function NetworkSwitch() {
+  const { isConnected, chainId } = useAccount();
+  const { switchChain, isPending } = useSwitchChain();
+  const toast = useToast();
+  if (!isConnected || chainId === undefined || chainId === robinhoodChain.id) return null;
+  return (
+    <button
+      className="btn sm netswitch"
+      disabled={isPending}
+      onClick={() =>
+        switchChain(
+          { chainId: robinhoodChain.id },
+          { onError: () => toast(`Your wallet did not switch. Add ${robinhoodChain.name} in your wallet, then try again.`) },
+        )
+      }
+    >
+      {isPending ? "Check your wallet…" : `Switch to ${robinhoodChain.name}`}
+    </button>
+  );
+}
 
 function WalletButton() {
   const { me, signIn, signOut, signingIn } = useSession();
@@ -41,6 +65,7 @@ function WalletButton() {
   }
   return (
     <div className="wallet-wrap" ref={ref}>
+      <NetworkSwitch />
       <button className="btn sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="menu">
         {shortAddress(me.address)}
       </button>

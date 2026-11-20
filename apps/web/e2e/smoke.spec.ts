@@ -269,19 +269,37 @@ test("wallet picker: popular wallets with logos when none is installed", async (
   await expect(dialog).toBeHidden();
 });
 
-test("wallet picker: an installed wallet appears with its own logo and signs in", async ({ page }) => {
-  // A fake wallet that announces itself the standard way (EIP-6963), as MetaMask, Rabby and others do.
-  await page.addInitScript(() => {
+/** A fake wallet that announces itself the standard way (EIP-6963), as MetaMask, Rabby and others do. It starts
+ * on Ethereum and does not know Robinhood Chain until it is added. `refuseChain` makes it reject network changes. */
+async function fakeWallet(page: Page, opts: { name: string; refuseChain?: boolean }) {
+  await page.addInitScript(({ name, refuseChain }) => {
     const account = "0x7a3f00000000000000000000000000000000091c";
+    const calls: { method: string; params?: unknown }[] = [];
+    (window as unknown as { __walletCalls: typeof calls }).__walletCalls = calls;
     let approved = false; // like a real wallet: no accounts until the user approves the site
+    let chain = "0x1";
+    let knowsRobinhood = false;
     const provider = {
-      request: async ({ method }: { method: string }) => {
+      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+        calls.push({ method, params });
         if (method === "eth_requestAccounts") {
           approved = true;
           return [account];
         }
         if (method === "eth_accounts") return approved ? [account] : [];
-        if (method === "eth_chainId") return "0x1237";
+        if (method === "eth_chainId") return chain;
+        if (method === "wallet_switchEthereumChain") {
+          if (refuseChain) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
+          const target = (params?.[0] as { chainId: string }).chainId;
+          if (target === "0x1237" && !knowsRobinhood) throw Object.assign(new Error("Unrecognized chain ID"), { code: 4902 });
+          chain = target;
+          return null;
+        }
+        if (method === "wallet_addEthereumChain") {
+          knowsRobinhood = true;
+          chain = (params?.[0] as { chainId: string }).chainId; // MetaMask switches after adding
+          return null;
+        }
         if (method === "personal_sign") return `0x${"ab".repeat(65)}`;
         if (method === "wallet_requestPermissions" || method === "wallet_getPermissions") return [{ parentCapability: "eth_accounts" }];
         return null;
@@ -290,22 +308,27 @@ test("wallet picker: an installed wallet appears with its own logo and signs in"
       removeListener: () => undefined,
     };
     const icon = "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#6A5ACD"/></svg>');
-    const detail = Object.freeze({ info: { uuid: "1b2c3d4e-0000-4000-8000-000000000001", name: "Test Wallet", icon, rdns: "xyz.testwallet" }, provider });
+    const detail = Object.freeze({ info: { uuid: "1b2c3d4e-0000-4000-8000-000000000001", name, icon, rdns: "xyz.testwallet" }, provider });
     const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
     window.addEventListener("eip6963:requestProvider", announce);
     announce();
-  });
-  let verified = false;
-  await mockApi(page, {
-    signedIn: false,
-    extra: {
-      "GET /auth/nonce": (route) => json(route, { nonce: "n0nce1234567" }),
-      "POST /auth/verify": (route) => {
-        verified = true;
-        return json(route, me);
-      },
+  }, opts);
+}
+
+function signInMocks(onVerify: () => void) {
+  return {
+    "GET /auth/nonce": (route: Route) => json(route, { nonce: "n0nce1234567" }),
+    "POST /auth/verify": (route: Route) => {
+      onVerify();
+      return json(route, me);
     },
-  });
+  };
+}
+
+test("wallet picker: an installed wallet appears with its logo, gets Robinhood Chain added, and signs in", async ({ page }) => {
+  await fakeWallet(page, { name: "Test Wallet" });
+  let verified = false;
+  await mockApi(page, { signedIn: false, extra: signInMocks(() => (verified = true)) });
   await page.goto("/app/agents");
   await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
   const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
@@ -316,5 +339,28 @@ test("wallet picker: an installed wallet appears with its own logo and signs in"
   await expect(dialog.getByText("Other wallets")).toBeVisible();
   await row.click();
   await expect(dialog).toBeHidden();
+  expect(verified).toBe(true);
+  const calls = await page.evaluate(() => (window as unknown as { __walletCalls: { method: string; params?: unknown[] }[] }).__walletCalls);
+  const add = calls.find((c) => c.method === "wallet_addEthereumChain");
+  expect(add?.params?.[0]).toMatchObject({
+    chainId: "0x1237",
+    chainName: "Robinhood Chain",
+    rpcUrls: ["https://robinhood.drpc.org"],
+    blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
+    nativeCurrency: { symbol: "ETH", decimals: 18 },
+  });
+  // Network first, then the sign-in signature.
+  expect(calls.findIndex((c) => c.method === "wallet_addEthereumChain")).toBeLessThan(calls.findIndex((c) => c.method === "personal_sign"));
+});
+
+test("wallet picker: a wallet that refuses Robinhood Chain still signs in and is told what to do", async ({ page }) => {
+  await fakeWallet(page, { name: "Picky Wallet", refuseChain: true });
+  let verified = false;
+  await mockApi(page, { signedIn: false, extra: signInMocks(() => (verified = true)) });
+  await page.goto("/app/agents");
+  await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
+  await page.getByRole("dialog", { name: "Connect a wallet" }).getByRole("button", { name: /Picky Wallet/ }).click();
+  await expect(page.getByText(/Switch Picky Wallet to Robinhood Chain before trading/)).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Connect a wallet" })).toBeHidden();
   expect(verified).toBe(true);
 });
