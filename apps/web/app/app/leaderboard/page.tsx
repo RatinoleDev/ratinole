@@ -4,6 +4,7 @@ import { LEADERBOARD, type LeaderboardRowDTO } from "@rationale/config";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "../../../lib/api";
+import { RobotAvatar } from "../../../components/robot/RobotAvatar";
 import { pct, upDown } from "../../../lib/format";
 
 export default function LeaderboardPage() {
@@ -18,7 +19,11 @@ export default function LeaderboardPage() {
   const row = (r: LeaderboardRowDTO, rank: number | null) => (
     <tr key={r.agentId} className={rank == null ? "unranked" : undefined}>
       <td>
-        <b>{rank != null ? `${rank}. ` : ""}{r.name}</b>
+        <span className="lbname">
+          <RobotAvatar seed={r.agentId} size={40} tile house={r.house} />
+          <b>{rank != null ? `${rank}. ` : ""}{r.name}</b>
+          {r.house && <i className="housetag">House</i>}
+        </span>
       </td>
       <td>{r.marketLabel}</td>
       <td className={`r num ${upDown(r.returnPct)}`}>{pct(r.returnPct)}</td>

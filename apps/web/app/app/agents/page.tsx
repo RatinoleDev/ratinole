@@ -8,6 +8,8 @@ import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
 import { DecisionRow } from "../../../components/app/DecisionFeed";
 import { ConnectPanel, useSession } from "../../../components/app/Session";
+import { Robot3D } from "../../../components/robot/Robot3D";
+import { RobotAvatar } from "../../../components/robot/RobotAvatar";
 import { api, del, patch } from "../../../lib/api";
 import { dateLabel, pct, upDown } from "../../../lib/format";
 
@@ -77,11 +79,20 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
   return (
     <details className="agent" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
       <summary>
-        <div>
-          <h3>{agent.name}</h3>
-          <small>
-            {agent.marketLabel}, Paper
-          </small>
+        <div className="agid">
+          <RobotAvatar
+            seed={agent.id}
+            size={56}
+            tile
+            house={agent.house}
+            mood={agent.status === "paused" ? "sleep" : agent.inPosition ? "hold" : "watch"}
+          />
+          <div>
+            <h3>{agent.name}</h3>
+            <small>
+              {agent.marketLabel}, Paper
+            </small>
+          </div>
         </div>
         <div>
           <small>Return</small>
@@ -93,7 +104,7 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
         </div>
         <div>
           <small>Status</small>
-          <span className="val">{status}</span>
+          <span className={`val stat ${agent.status === "paused" ? "off" : agent.inPosition ? "in" : "on"}`}>{status}</span>
         </div>
         <span className="tog" />
       </summary>
@@ -153,12 +164,15 @@ export default function AgentsPage() {
   const list = q.data ?? [];
   if (list.length === 0)
     return (
-      <div className="panel connect">
-        <h2>No agents yet</h2>
-        <p>Write a strategy in a sentence, check how it was understood, backtest it, then launch it in paper mode.</p>
-        <Link className="btn blue" href="/app/studio">
-          Open Agent Studio
-        </Link>
+      <div className="panel connect withbot">
+        <Robot3D mood="sleeping" greet={false} />
+        <div>
+          <h2>No agents yet</h2>
+          <p>Write a strategy in a sentence, check how it was understood, backtest it, then launch it in paper mode.</p>
+          <Link className="btn blue" href="/app/studio">
+            Open Agent Studio
+          </Link>
+        </div>
       </div>
     );
   return (

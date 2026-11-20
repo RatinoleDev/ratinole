@@ -9,18 +9,52 @@ import { shortAddress } from "../../lib/format";
 import { useToast } from "../Toast";
 import { useAccount } from "wagmi";
 import { ensureRobinhoodChain, type Eip1193 } from "../../lib/chain";
+import { RobotAvatar } from "../robot/RobotAvatar";
 import { useSession } from "./Session";
 
-const NAV = [
-  { href: "/app", label: "Overview" },
-  { href: "/app/studio", label: "Agent Studio" },
-  { href: "/app/agents", label: "My agents", count: true },
-  { href: "/app/leaderboard", label: "Leaderboard" },
-  { href: "/app/vault", label: "Vault" },
-  { href: "/app/payroll", label: "Payroll" },
+type NavItem = { href: string; label: string; sub: string; icon?: string; count?: boolean };
+
+const NAV: NavItem[] = [
+  {
+    href: "/app",
+    label: "Overview",
+    sub: "Your paper agents against simply holding.",
+    icon: "M4 4h6.5v6.5H4ZM13.5 4H20v6.5h-6.5ZM4 13.5h6.5V20H4ZM13.5 13.5H20V20h-6.5Z",
+  },
+  {
+    href: "/app/studio",
+    label: "Agent Studio",
+    sub: "Describe a strategy, check how it was read, backtest it, launch it.",
+    icon: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9ZM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z",
+  },
+  {
+    href: "/app/agents",
+    label: "My agents",
+    sub: "Every agent, and every decision it wrote down.",
+    icon: "M12 7V4M7 7h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3ZM9 12.5v1.5M15 12.5v1.5M2 12v3M22 12v3",
+    count: true,
+  },
+  {
+    href: "/app/leaderboard",
+    label: "Leaderboard",
+    sub: "Paper agents ranked against holding the same market.",
+    icon: "M5 20v-7M12 20V5M19 20v-10M3 20h18",
+  },
+  {
+    href: "/app/vault",
+    label: "Vault",
+    sub: "The limits a vault enforces. Opens with live trading.",
+    icon: "M12 3l7.5 3v5.5c0 4.5-3.1 8-7.5 9.5-4.4-1.5-7.5-5-7.5-9.5V6ZM9 12l2.2 2.2L15.2 10",
+  },
+  {
+    href: "/app/payroll",
+    label: "Payroll",
+    sub: "Scheduled payments from a vault. Arrives with live vaults.",
+    icon: "M3.5 7.5h17v11h-17ZM3.5 11h17M7 15h4",
+  },
 ];
 /** Pages reached from the wallet menu rather than the rail. */
-const HIDDEN = [{ href: "/app/settings", label: "Settings" }];
+const HIDDEN: NavItem[] = [{ href: "/app/settings", label: "Settings", sub: "Risk limits for new strategies and agents." }];
 
 /** Shown while the connected wallet is on another network: one click switches to Robinhood Chain, adding it if needed. */
 function NetworkSwitch() {
@@ -70,7 +104,8 @@ function WalletButton() {
   return (
     <div className="wallet-wrap" ref={ref}>
       <NetworkSwitch />
-      <button className="btn sm" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="menu">
+      <button className="btn sm walletbtn" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-haspopup="menu">
+        <i aria-hidden="true" />
         {shortAddress(me.address)}
       </button>
       {open && (
@@ -98,6 +133,13 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const toast = useToast();
   const { me } = useSession();
+  const nav = useRef<HTMLElement>(null);
+  // On a phone the links are one row that scrolls sideways: keep the current page's link in view.
+  useEffect(() => {
+    const row = nav.current;
+    const on = row?.querySelector<HTMLElement>("a.on");
+    if (row && on && row.scrollWidth > row.clientWidth) row.scrollLeft = on.offsetLeft - (row.clientWidth - on.offsetWidth) / 2;
+  }, [pathname]);
   const active =
     [...NAV, ...HIDDEN].find((n) => n.href === pathname) ??
     NAV.find((n) => n.href !== "/app" && pathname.startsWith(n.href)) ??
@@ -109,21 +151,36 @@ export function Shell({ children }: { children: ReactNode }) {
           <BrandMark />
           <BrandWordmark />
         </Link>
-        {NAV.map((n) => (
+        <nav className="railnav" aria-label="App" ref={nav}>
+          {NAV.map((n) => (
           <Link key={n.href} href={n.href} className={`nav${n.href === active.href ? " on" : ""}`}>
-            {n.label}
+            <span className="navl">
+              {n.icon && (
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d={n.icon} />
+                </svg>
+              )}
+              {n.label}
+            </span>
             {n.count && me && me.agentCount > 0 ? <span className="count">{me.agentCount}</span> : null}
           </Link>
-        ))}
+          ))}
+        </nav>
         <div className="foot">
-          Paper trading with virtual money.
-          <br />
-          <Link href="/">Back to site</Link>
+          <RobotAvatar seed="ratinole" size={42} tile house />
+          <span>
+            Paper trading with virtual money.
+            <br />
+            <Link href="/">Back to site</Link>
+          </span>
         </div>
       </aside>
       <main className="main">
         <div className="bar">
-          <h1>{active.label}</h1>
+          <div className="bartitle">
+            <h1>{active.label}</h1>
+            <p>{active.sub}</p>
+          </div>
           <span className="sample">Paper</span>
           <div className="seg" role="group" aria-label="Mode">
             <button className="on" aria-pressed="true">

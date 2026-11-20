@@ -3,6 +3,7 @@
 import type { DecisionDTO } from "@rationale/config";
 import { useState } from "react";
 import { actionLabel, actionTag, hourLabel, signed, usd } from "../../lib/format";
+import { RobotAvatar } from "../robot/RobotAvatar";
 
 /** One decision as a feed row: action, hour, explanation, and its evidence and checks on demand. */
 export function DecisionRow({ d, showAgent = false }: { d: DecisionDTO; showAgent?: boolean }) {
@@ -10,7 +11,12 @@ export function DecisionRow({ d, showAgent = false }: { d: DecisionDTO; showAgen
   return (
     <div className="row">
       <div className="meta">
-        {showAgent && <b>{d.agentName}</b>}
+        {showAgent && (
+          <>
+            <RobotAvatar seed={d.agentId} size={24} house={d.house} />
+            <b>{d.agentName}</b>
+          </>
+        )}
         <span className={`pill ${actionTag(d.action)}`}>{actionLabel(d.action)}</span>
         <span>{hourLabel(d.hour)}</span>
         <span>Confidence {d.confidence}%</span>

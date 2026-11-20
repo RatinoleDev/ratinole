@@ -7,6 +7,7 @@ import { createSiweMessage } from "viem/siwe";
 import { useAccount, useConnect, useDisconnect, useSignMessage, type Connector } from "wagmi";
 import { ApiFailure, api, post } from "../../lib/api";
 import { ensureRobinhoodChain, isUserRejection, unlessIgnored, walletErrorCode, type ChainOutcome, type Eip1193 } from "../../lib/chain";
+import { Robot3D } from "../robot/Robot3D";
 import { useToast } from "../Toast";
 import { WalletPicker, type PickerStage } from "./WalletPicker";
 
@@ -214,12 +215,15 @@ export function ConnectPanel({ text }: { text: string }) {
   const { signIn, signingIn, loading } = useSession();
   if (loading) return <div className="panel"><p className="empty">Checking your session…</p></div>;
   return (
-    <div className="panel connect">
-      <h2>Connect a wallet</h2>
-      <p>{text}</p>
-      <button className="btn" onClick={() => void signIn()} disabled={signingIn}>
-        {signingIn ? "Waiting for your wallet…" : "Connect wallet"}
-      </button>
+    <div className="panel connect withbot">
+      <Robot3D mood={signingIn ? "thinking" : "idle"} />
+      <div>
+        <h2>Connect a wallet</h2>
+        <p>{text}</p>
+        <button className="btn blue" onClick={() => void signIn()} disabled={signingIn}>
+          {signingIn ? "Waiting for your wallet…" : "Connect wallet"}
+        </button>
+      </div>
     </div>
   );
 }

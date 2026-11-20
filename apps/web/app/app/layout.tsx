@@ -4,8 +4,10 @@ import { Shell } from "../../components/app/Shell";
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   return (
-    <Providers>
-      <Shell>{children}</Shell>
-    </Providers>
+    <div className="appdark">
+      <Providers>
+        <Shell>{children}</Shell>
+      </Providers>
+    </div>
   );
 }

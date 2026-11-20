@@ -8,8 +8,14 @@ import { Chart, splitIndexOf } from "../../../components/Chart";
 import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
 import { useSession } from "../../../components/app/Session";
+import { Robot3D } from "../../../components/robot/Robot3D";
+import { RobotAvatar } from "../../../components/robot/RobotAvatar";
 import { ApiFailure, api, post } from "../../../lib/api";
 import { pct, upDown } from "../../../lib/format";
+import type { RobotMood } from "../../../lib/robot3d";
+
+const MAX_SENTENCE = 600;
+const STEPS = ["Describe", "Check the reading", "Backtest", "Launch"];
 
 const DEFAULT_SENTENCE =
   "Buy ETH when RSI drops below 30 in an uptrend, skip if there is bad news, take profit at 8% and stop at 4%, use 25% per trade";
@@ -117,22 +123,62 @@ export default function StudioPage() {
   const b = bt.data;
   const r = b?.status === "done" ? b.result : undefined;
   const running = !!backtestId && (!b || b.status === "queued" || b.status === "running");
+  const failed = !!btError || b?.status === "failed";
+  const step = r ? 3 : backtestId ? 2 : res?.ok ? 1 : 0;
+
+  // The robot acts out what the page is doing. It never reacts to how a backtest scored.
+  const [mood, say]: [RobotMood, string] =
+    intake.kind === "loading"
+      ? ["thinking", "Reading your strategy…"]
+      : starting || running
+        ? ["thinking", "Running it on real hourly prices…"]
+        : failed
+          ? ["confused", "The backtest did not finish. The reason is in the Backtest panel."]
+          : r
+            ? ["idle", "Backtest done. Judge it by the unseen number, not the tuned one."]
+            : intake.kind === "signin"
+              ? ["idle", "I need a signed-in wallet before I can read a strategy."]
+              : res && !res.ok
+                ? ["confused", "I could not use that sentence. The reason is below."]
+                : res?.ok
+                  ? ["happy", "Here is how I read it. Check each line, then run the backtest."]
+                  : ["idle", "Tell me your strategy in one sentence. I show you how I read it before anything runs."];
 
   return (
     <section>
+      <ol className="steps" aria-label="Steps">
+        {STEPS.map((label, i) => (
+          <li key={label} className={i < step ? "done" : i === step ? "on" : undefined} aria-current={i === step ? "step" : undefined}>
+            <i aria-hidden="true">{i < step ? "✓" : i + 1}</i>
+            {label}
+          </li>
+        ))}
+      </ol>
       <div className="grid2">
         <div className="panel">
+          <div className="botstage">
+            <Robot3D mood={mood} />
+            <p className="botsay" role="status">
+              <small>Studio agent</small>
+              {say}
+            </p>
+          </div>
           <h2>Describe your strategy</h2>
           <p className="hint">
             Write it the way you would explain it to a trader. Name a market, when to buy, when to sell and how much to
             risk.
           </p>
-          <textarea
-            aria-label="Strategy description"
-            value={sentence}
-            onChange={(e) => setSentence(e.target.value)}
-            maxLength={600}
-          />
+          <div className="tawrap">
+            <textarea
+              aria-label="Strategy description"
+              value={sentence}
+              onChange={(e) => setSentence(e.target.value)}
+              maxLength={MAX_SENTENCE}
+            />
+            <span className="tacount num" aria-hidden="true">
+              {sentence.length} / {MAX_SENTENCE}
+            </span>
+          </div>
           <div className="chips">
             {CHIPS.map((c) => (
               <button
@@ -148,16 +194,17 @@ export default function StudioPage() {
             ))}
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="btn blue" onClick={() => void understand(sentence)} disabled={intake.kind === "loading"}>
+            {/* The lime button is always the next step. */}
+            <button className={`btn ${step === 0 ? "blue" : "ghost"}`} onClick={() => void understand(sentence)} disabled={intake.kind === "loading"}>
               {intake.kind === "loading" ? "Reading…" : "Understand"}
             </button>
             {res?.ok && !backtestId && (
-              <button className="btn" onClick={() => void runBacktest()} disabled={starting}>
+              <button className="btn blue" onClick={() => void runBacktest()} disabled={starting}>
                 {starting ? "Starting…" : "Looks right, run backtest"}
               </button>
             )}
             {r && (
-              <button className="btn ghost" onClick={() => void launch()} disabled={launching}>
+              <button className="btn blue" onClick={() => void launch()} disabled={launching}>
                 {launching ? "Launching…" : "Launch in paper mode"}
               </button>
             )}
@@ -231,6 +278,13 @@ export default function StudioPage() {
                       ? `${r.tunedDays + r.unseenDays} days of real hourly prices.`
                       : ""}
           </p>
+          {!r && !failed && (
+            <div className={`btempty${running || starting ? " run" : ""}`}>
+              <RobotAvatar seed="backtest" size={64} mood={running || starting ? "watch" : "sleep"} house />
+              <Chart strategy={[]} holding={[]} label={running || starting ? "Backtest running" : "No backtest yet"} />
+              {(running || starting) && <span className="btbar" aria-hidden="true" />}
+            </div>
+          )}
           {r && b && (
             <div>
               <div className="bt">

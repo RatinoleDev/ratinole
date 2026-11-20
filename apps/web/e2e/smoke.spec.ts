@@ -110,6 +110,19 @@ test("app pages ask a signed-out visitor to connect a wallet", async ({ page }) 
   await mockApi(page, { signedIn: false });
   await page.goto("/app/agents");
   await expect(page.getByRole("heading", { name: "Connect a wallet" })).toBeVisible();
+  // The app is dark, and the robot greets the visitor.
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(7, 7, 8)");
+  await expect(page.locator(".panel.connect .robot3d")).toBeVisible();
+});
+
+test("app pages fit a phone screen without sideways scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page, { signedIn: true });
+  for (const path of ["/app", "/app/studio", "/app/agents", "/app/leaderboard", "/app/vault"]) {
+    await page.goto(path);
+    await expect(page.locator(".railnav a.on")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), path).toBeLessThanOrEqual(0);
+  }
 });
 
 test("studio: sentence, plan, backtest with warnings, launch", async ({ page }) => {
@@ -176,11 +189,21 @@ test("studio: sentence, plan, backtest with warnings, launch", async ({ page }) 
     },
   });
   await page.goto("/app/studio");
+  // The robot and the step bar follow the page.
+  const step = page.locator(".steps li[aria-current=step]");
+  const says = page.locator(".botstage .botsay");
+  await expect(page.locator(".botstage .robot3d")).toBeVisible();
+  await expect(step).toContainText("Describe");
+  await expect(says).toContainText("Tell me your strategy");
   await page.getByRole("button", { name: "Understand" }).click();
   await expect(page.getByText("RSI is below 30")).toBeVisible();
   await expect(page.getByText("No size was given")).toBeVisible();
+  await expect(step).toContainText("Check the reading");
+  await expect(says).toContainText("Here is how I read it");
   await page.getByRole("button", { name: "Looks right, run backtest" }).click();
   await expect(page.getByText("Read these numbers with care")).toBeVisible();
+  await expect(step).toContainText("Launch");
+  await expect(says).toContainText("Backtest done");
   await expect(page.getByText(/too few to tell skill from luck/)).toBeVisible();
   await expect(page.getByText("−2.5%").first()).toBeVisible();
   await page.getByRole("button", { name: "Launch in paper mode" }).click();
@@ -200,6 +223,7 @@ test("my agents: delete asks first, then archives", async ({ page }) => {
     },
   });
   await page.goto("/app/agents");
+  await expect(page.locator(".agent .rbot")).toBeVisible();
   page.once("dialog", (d) => void d.dismiss());
   await page.getByRole("button", { name: "Delete" }).click();
   expect(deleted).toBe(false);
@@ -248,6 +272,7 @@ test("leaderboard: ranked agents first, newer ones listed as not ranked", async 
   await mockApi(page, { signedIn: false, extra: { "GET /leaderboard": (r) => json(r, [row("Old", 1, true), row("New", 5, false)]) } });
   await page.goto("/app/leaderboard");
   await expect(page.getByText("1. Old")).toBeVisible();
+  await expect(page.locator(".lb .rbot")).toHaveCount(2);
   await expect(page.getByText(/Not ranked yet/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy" }).first()).toBeDisabled();
 });
