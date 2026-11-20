@@ -116,6 +116,12 @@ export interface DecisionDTO extends Decision {
   markPrice: number;
   candleSource: string;
   agentName: string;
+  /** "live" decisions moved real money in the owner's vault. */
+  mode: AgentMode;
+  /** Live only: why this hour's order did not go through. */
+  execError?: string;
+  /** Live only: dollars the owner moved into (+) or out of (-) the vault since the previous decision. */
+  flowUsd?: number;
   /** Run by the Ratinole team (labelled "House"). */
   house: boolean;
   /** The agent's strategy sentence. */
@@ -124,12 +130,18 @@ export interface DecisionDTO extends Decision {
   marketLabel: string;
 }
 
+export type AgentMode = "paper" | "live";
+
 export interface AgentDTO {
   id: string;
   name: string;
   market: string;
   marketLabel: string;
-  mode: "paper";
+  mode: AgentMode;
+  /** Live only: the owner's vault on Robinhood Chain. */
+  vault: string | null;
+  /** Set when the engine stopped a live agent itself, in plain words. */
+  pausedReason: string | null;
   house: boolean;
   /** "archived" agents were deleted by their owner; their decisions are kept. */
   status: "active" | "paused" | "archived";
@@ -139,6 +151,7 @@ export interface AgentDTO {
   paramsText: string[];
   backtestId: string | null;
   launchedAt: string;
+  /** Paper: virtual cash at launch. Live: the base results are measured against; it moves with deposits and withdrawals. */
   startingCash: number;
   /** null until the first decision is stored. */
   equity: number | null;
@@ -234,4 +247,24 @@ export interface HealthDTO {
 export interface ApiError {
   error: string;
   message: string;
+}
+
+/** What the web app needs to know about live trading. `live` is false until the contracts are deployed and set. */
+export interface ChainConfigDTO {
+  live: boolean;
+  chainId: number;
+  explorerUrl: string;
+  /** The vault factory; null while live trading is off. */
+  factory: string | null;
+  /** The agent's address: a vault must name it as operator for a live agent to trade it. */
+  operator: string | null;
+  stable: { symbol: string; address: string; decimals: number };
+  tokens: { market: string; symbol: string; address: string; decimals: number }[];
+  limits: {
+    minVaultUsd: number;
+    /** The most a vault may hold when a live agent is launched, while the contracts are unaudited. Null = no cap. */
+    maxVaultUsd: number | null;
+    defaultSlippageBps: number;
+    defaultDailyLimitUsd: number;
+  };
 }

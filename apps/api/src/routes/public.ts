@@ -1,11 +1,16 @@
 /** Public data: leaderboard, latest decisions, the landing example, health. */
 import { HOUR_MS, describePlan, planChecks, type AgentParams } from "@rationale/brain";
 import {
+  CHAIN,
   EXAMPLE_STRATEGY,
   LEADERBOARD,
+  LIVE,
+  LIVE_STABLE,
+  LIVE_TOKENS,
   MARKET_IDS,
   RISK_DEFAULTS,
   marketLabel,
+  type ChainConfigDTO,
   type ExampleDTO,
   type HealthDTO,
   type LeaderboardRowDTO,
@@ -35,7 +40,8 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
    */
   app.get("/leaderboard", async (): Promise<LeaderboardRowDTO[]> => {
     const agents = await deps.prisma.agent.findMany({
-      where: { status: { not: "archived" }, state: { is: { decisions: { gt: 0 } } } },
+      // Paper agents only: live agents trade real money and are not ranked publicly.
+      where: { mode: "paper", status: { not: "archived" }, state: { is: { decisions: { gt: 0 } } } },
       select: { id: true, name: true, market: true, house: true, startingCash: true, launchedAt: true, state: true },
     });
     const rows: LeaderboardRowDTO[] = agents.map((a) => {
@@ -65,12 +71,43 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
   app.get<{ Querystring: Record<string, string> }>("/public/decisions", async (req) => {
     const q = LimitQuery.parse(req.query);
     const rows = await deps.prisma.decision.findMany({
-      where: { agent: { status: { not: "archived" } } },
+      where: { agent: { mode: "paper", status: { not: "archived" } } },
       orderBy: [{ hour: "desc" }, { createdAt: "desc" }],
       take: q.limit,
-      include: { agent: { select: { name: true, market: true, sentence: true, house: true } } },
+      include: { agent: { select: { name: true, market: true, sentence: true, house: true, mode: true } } },
     });
     return rows.map((d) => decisionDTO(d, d.agent));
+  });
+
+  /**
+   * What the web app needs for live trading. `live` is false until the vault factory's address is configured, and
+   * then the Vault screens stay as a preview. The operator is read from the factory, cached for a few minutes.
+   */
+  app.get("/public/chain", async (): Promise<ChainConfigDTO> => {
+    let operator: string | null = null;
+    if (deps.vaults) {
+      const key = `chain:operator:${deps.vaults.factory}`;
+      operator = await deps.redis.get(key).catch(() => null);
+      if (!operator) {
+        operator = await deps.vaults.defaultOperator().catch(() => null);
+        if (operator) await deps.redis.set(key, operator, "EX", 300).catch(() => undefined);
+      }
+    }
+    return {
+      live: !!deps.vaults,
+      chainId: CHAIN.id,
+      explorerUrl: CHAIN.explorerUrl,
+      factory: deps.vaults?.factory ?? null,
+      operator,
+      stable: LIVE_STABLE,
+      tokens: MARKET_IDS.map((market) => ({ market, ...LIVE_TOKENS[market] })),
+      limits: {
+        minVaultUsd: LIVE.minVaultUsd,
+        maxVaultUsd: deps.env.liveMaxVaultUsd,
+        defaultSlippageBps: LIVE.defaults.maxSlippageBps,
+        defaultDailyLimitUsd: LIVE.defaults.dailyLimitUsd,
+      },
+    };
   });
 
   /** The latest stored reading of each market (no reading = left out). */

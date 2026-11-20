@@ -5,7 +5,7 @@ import type { Agent, AgentState, Backtest, Decision, MarketSnapshot } from "@rat
 
 const DAY_MS = 24 * 3_600_000;
 
-export function decisionDTO(d: Decision, agent: { name: string; market: string; sentence: string; house: boolean }): DecisionDTO {
+export function decisionDTO(d: Decision, agent: { name: string; market: string; sentence: string; house: boolean; mode: string }): DecisionDTO {
   return {
     id: d.id,
     agentId: d.agentId,
@@ -28,6 +28,9 @@ export function decisionDTO(d: Decision, agent: { name: string; market: string; 
     markPrice: d.markPrice,
     candleSource: d.candleSource,
     agentName: agent.name,
+    mode: agent.mode === "live" ? "live" : "paper",
+    ...(d.execError ? { execError: d.execError } : {}),
+    ...(d.flowUsd != null ? { flowUsd: d.flowUsd } : {}),
     house: agent.house,
     strategy: agent.sentence,
     market: agent.market,
@@ -82,7 +85,9 @@ export function agentDTO(a: Agent & { state: AgentState | null }, latest: Decisi
     name: a.name,
     market: a.market,
     marketLabel: marketLabel(a.market),
-    mode: "paper",
+    mode: a.mode === "live" ? "live" : "paper",
+    vault: a.vault,
+    pausedReason: a.status === "paused" ? a.pausedReason : null,
     house: a.house,
     status: a.status as AgentDTO["status"],
     sentence: a.sentence,

@@ -2,6 +2,7 @@ import { ENGINE_QUEUE } from "@rationale/config";
 import { prisma } from "@rationale/db";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
+import { viemVaultReader } from "./chain";
 import { readEnv } from "./env";
 import { anthropicDrafter } from "./llm/anthropic";
 import { buildServer } from "./server";
@@ -25,10 +26,11 @@ const app = await buildServer({
   },
   drafterFor: (userId) =>
     env.anthropicApiKey ? anthropicDrafter({ apiKey: env.anthropicApiKey, model: env.llmModel, prisma, userId }) : null,
+  vaults: env.liveFactory ? viemVaultReader({ rpcUrl: env.liveRpcUrl, factory: env.liveFactory }) : null,
 });
 
 await app.listen({ port: env.port, host: "127.0.0.1" });
-console.log(JSON.stringify({ t: new Date().toISOString(), level: "info", msg: "api listening", port: env.port, llm: env.anthropicApiKey ? env.llmModel : "off" }));
+console.log(JSON.stringify({ t: new Date().toISOString(), level: "info", msg: "api listening", port: env.port, llm: env.anthropicApiKey ? env.llmModel : "off", live: env.liveFactory ?? "off" }));
 
 const stop = async () => {
   await app.close();

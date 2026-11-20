@@ -3,6 +3,7 @@ import type { PrismaClient, User } from "@rationale/db";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Redis } from "ioredis";
 import { currentUser } from "./auth";
+import type { VaultReader } from "./chain";
 import type { ApiEnv } from "./env";
 
 export interface ApiDeps {
@@ -13,6 +14,8 @@ export interface ApiDeps {
   enqueue: (name: "backtest", data: { backtestId: string }, jobId: string) => Promise<void>;
   /** The LLM drafter for a user, or null when no LLM is configured. */
   drafterFor: (userId: string) => PlanDrafter | null;
+  /** Reads vaults on Robinhood Chain. Null while live trading is off. It holds no key. */
+  vaults: VaultReader | null;
   now?: () => number;
 }
 

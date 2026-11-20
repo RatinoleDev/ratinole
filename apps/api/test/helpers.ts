@@ -16,6 +16,9 @@ export const env: ApiEnv = {
   llmModel: "claude-opus-5-5",
   llmMonthlyBudgetUsd: 20,
   production: false,
+  liveFactory: null,
+  liveRpcUrl: "http://127.0.0.1:1",
+  liveMaxVaultUsd: 500,
 };
 
 export const redis = new Redis(env.redisUrl);
@@ -42,6 +45,7 @@ export function makeApp(over: Partial<ApiDeps> = {}) {
       enqueued.push({ name, data, jobId });
     },
     drafterFor: () => null,
+    vaults: null,
     ...over,
   };
   return { deps, enqueued, app: buildServer(deps) };
