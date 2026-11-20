@@ -251,3 +251,70 @@ test("leaderboard: ranked agents first, newer ones listed as not ranked", async 
   await expect(page.getByText(/Not ranked yet/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy" }).first()).toBeDisabled();
 });
+
+test("wallet picker: popular wallets with logos when none is installed", async ({ page }) => {
+  await mockApi(page, { signedIn: false });
+  await page.goto("/app/agents");
+  await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("No wallet found in this browser")).toBeVisible();
+  for (const name of ["MetaMask", "Rabby", "Coinbase Wallet", "OKX Wallet", "Phantom", "Trust Wallet"]) {
+    const row = dialog.getByRole("link", { name: new RegExp(name) });
+    await expect(row).toBeVisible();
+    await expect(row.locator("img")).toHaveJSProperty("complete", true);
+    expect(await row.locator("img").evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  }
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});
+
+test("wallet picker: an installed wallet appears with its own logo and signs in", async ({ page }) => {
+  // A fake wallet that announces itself the standard way (EIP-6963), as MetaMask, Rabby and others do.
+  await page.addInitScript(() => {
+    const account = "0x7a3f00000000000000000000000000000000091c";
+    let approved = false; // like a real wallet: no accounts until the user approves the site
+    const provider = {
+      request: async ({ method }: { method: string }) => {
+        if (method === "eth_requestAccounts") {
+          approved = true;
+          return [account];
+        }
+        if (method === "eth_accounts") return approved ? [account] : [];
+        if (method === "eth_chainId") return "0x1237";
+        if (method === "personal_sign") return `0x${"ab".repeat(65)}`;
+        if (method === "wallet_requestPermissions" || method === "wallet_getPermissions") return [{ parentCapability: "eth_accounts" }];
+        return null;
+      },
+      on: () => undefined,
+      removeListener: () => undefined,
+    };
+    const icon = "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#6A5ACD"/></svg>');
+    const detail = Object.freeze({ info: { uuid: "1b2c3d4e-0000-4000-8000-000000000001", name: "Test Wallet", icon, rdns: "xyz.testwallet" }, provider });
+    const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
+    window.addEventListener("eip6963:requestProvider", announce);
+    announce();
+  });
+  let verified = false;
+  await mockApi(page, {
+    signedIn: false,
+    extra: {
+      "GET /auth/nonce": (route) => json(route, { nonce: "n0nce1234567" }),
+      "POST /auth/verify": (route) => {
+        verified = true;
+        return json(route, me);
+      },
+    },
+  });
+  await page.goto("/app/agents");
+  await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
+  const row = dialog.getByRole("button", { name: /Test Wallet/ });
+  await expect(row).toBeVisible();
+  await expect(row.getByText("Detected")).toBeVisible();
+  expect(await row.locator("img").getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+  await expect(dialog.getByText("Other wallets")).toBeVisible();
+  await row.click();
+  await expect(dialog).toBeHidden();
+  expect(verified).toBe(true);
+});

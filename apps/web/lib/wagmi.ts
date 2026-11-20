@@ -10,11 +10,15 @@ export const robinhoodChain = defineChain({
   blockExplorers: { default: { name: "Blockscout", url: CHAIN.explorerUrl } },
 });
 
-/** Browser-extension wallets only (MetaMask, Rabby, Coinbase extension). No WalletConnect. */
+/**
+ * Browser wallets only, no WalletConnect. Every installed wallet that announces itself (EIP-6963: MetaMask,
+ * Rabby, Coinbase, OKX, Phantom, Trust, Brave and others) appears with its own name and logo; `injected()`
+ * covers older wallets that only set `window.ethereum`.
+ */
 export const wagmiConfig = createConfig({
   chains: [robinhoodChain],
   connectors: [injected()],
-  multiInjectedProviderDiscovery: false,
+  multiInjectedProviderDiscovery: true,
   transports: { [robinhoodChain.id]: http() },
   ssr: true,
 });
