@@ -15,11 +15,18 @@ export type ChainOutcome = "already" | "switched" | "rejected" | "unsupported" |
 
 export const CHAIN_HEX = `0x${CHAIN.id.toString(16)}`;
 
+/**
+ * Where this build reads the chain: the public RPC, unless a build sets another one (a local fork, for rehearsing
+ * live trading with fake money). The same address is the one handed to wallets when the network is added, so a
+ * rehearsal build never reads a fork while pointing a wallet at the real chain.
+ */
+export const RPC_URL = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || CHAIN.rpcUrl;
+
 export const ADD_CHAIN_PARAMS = {
   chainId: CHAIN_HEX,
   chainName: CHAIN.name,
   nativeCurrency: CHAIN.nativeCurrency,
-  rpcUrls: [CHAIN.rpcUrl],
+  rpcUrls: [RPC_URL],
   blockExplorerUrls: [CHAIN.explorerUrl],
 };
 

@@ -14,7 +14,10 @@ import { ConnectPanel, useSession } from "../../../components/app/Session";
 import { shortAddress, usd } from "../../../lib/format";
 import { useTx } from "../../../lib/tx";
 
-/** Assumptions behind the worst-case figure, shown in the formula text. */
+/**
+ * Assumptions behind the figure in the "stolen agent key" box, shown in its formula text. It describes normal
+ * conditions and is not a maximum: the box says so, and says what makes it larger.
+ */
 const POOL_FEE_PCT = 0.3;
 const ORACLE_LAG_PCT = 0.5;
 const worstCase = (limit: number, slipPct: number) => (limit * (slipPct + POOL_FEE_PCT + ORACLE_LAG_PCT)) / 100;
@@ -80,11 +83,11 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
         <input type="range" min={0.1} max={5} step={0.1} value={slip} onChange={(e) => setSlip(Number(e.target.value))} disabled={disabled} />
       </label>
       <div className="worst">
-        <small>Most a stolen agent key could cost you in one 24-hour window</small>
+        <small>What a stolen agent key could cost you in one 24-hour window, in normal conditions</small>
         <b className="num">${worstCase(limit, slip).toFixed(2)}</b>
         <small>
-          Daily limit × (slippage + {POOL_FEE_PCT}% pool fee + {ORACLE_LAG_PCT}% oracle lag). The windows are fixed, so around the end of one it can be twice this
-          within a short time. You stop it by pausing.
+          Daily limit × (slippage + {POOL_FEE_PCT}% pool fee + {ORACLE_LAG_PCT}% oracle lag). This is not a maximum. Two windows can meet, which doubles it. If
+          the price feed stops updating while the market moves, the loss in a window can be as large as the daily limit times that move. You stop it by pausing.
         </small>
       </div>
     </>
@@ -185,19 +188,30 @@ interface Reading {
   walletStable: bigint;
   /** The agent's key, as the factory on-chain names it today. */
   agentKey: Address;
+  /** Who the vault itself says owns it. The factory's list only says where to look. */
+  vaultOwner: Address;
+  /** A wallet the vault has been offered to, and until when it can accept (seconds). */
+  pendingOwner: Address;
+  pendingUntil: number;
+  /** The recovery wallet, and from when it can take the vault if it has started a claim (seconds; 0 = no claim). */
+  recovery: Address;
+  recoveryReadyAt: number;
   assets: Asset[];
 }
+/** Calls before the per-token ones in the batch. */
+const CORE = 13;
 type Outcome = { status: "success" | "failure"; result?: unknown };
 
 function toReading(r: readonly Outcome[] | undefined, chain: ChainConfigDTO): Reading | null {
   if (!r) return null;
   const ok = (i: number) => r[i]?.status === "success";
   const at = <T,>(i: number) => r[i]!.result as T;
-  for (let i = 0; i <= 7; i++) if (!ok(i)) return null;
+  for (let i = 0; i < CORE; i++) if (!ok(i)) return null;
   const assets: Asset[] = [{ symbol: chain.stable.symbol, address: chain.stable.address as Address, decimals: chain.stable.decimals, raw: at<bigint>(5), price: 1 }];
   for (const [k, t] of chain.tokens.entries()) {
-    if (!ok(8 + 2 * k)) return null;
-    assets.push({ symbol: t.symbol, address: t.address as Address, decimals: t.decimals, raw: at<bigint>(8 + 2 * k), price: ok(9 + 2 * k) ? fromUnits(at<bigint>(9 + 2 * k), 18) : null });
+    const bal = CORE + 2 * k;
+    if (!ok(bal)) return null;
+    assets.push({ symbol: t.symbol, address: t.address as Address, decimals: t.decimals, raw: at<bigint>(bal), price: ok(bal + 1) ? fromUnits(at<bigint>(bal + 1), 18) : null });
   }
   return {
     paused: at<boolean>(0),
@@ -207,13 +221,38 @@ function toReading(r: readonly Outcome[] | undefined, chain: ChainConfigDTO): Re
     remaining: at<bigint>(4),
     walletStable: at<bigint>(6),
     agentKey: at<Address>(7),
+    vaultOwner: at<Address>(8),
+    pendingOwner: at<Address>(9),
+    pendingUntil: Number(at<bigint>(10)),
+    recovery: at<Address>(11),
+    recoveryReadyAt: Number(at<bigint>(12)),
     assets,
   };
 }
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
-function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainConfigDTO; vault: Address; owner: Address; canSign: boolean; degraded: boolean }) {
+const when = (seconds: number) => new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+function ManageVault({
+  chain,
+  vault,
+  owner,
+  ownerIs,
+  canSign,
+  degraded,
+  onCreated,
+}: {
+  chain: ChainConfigDTO;
+  vault: Address;
+  owner: Address;
+  /** How `owner` is known, for the sentence that says where a withdrawal goes. */
+  ownerIs: string;
+  canSign: boolean;
+  /** The site's server cannot be reached: nothing that sends money in or grants access is offered. */
+  degraded: boolean;
+  onCreated: () => void;
+}) {
   // Read as one batch. The calls are a plain list, so results are picked by position in `toReading`.
   const stable = chain.stable;
   const contracts = useMemo(() => {
@@ -229,6 +268,11 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
       call(stable.address, erc, "balanceOf", [vault]),
       call(stable.address, erc, "balanceOf", [owner]),
       call(chain.factory as Address, FACTORY_ABI as Abi, "defaultOperator"),
+      call(vault, va, "owner"),
+      call(vault, va, "pendingOwner"),
+      call(vault, va, "pendingOwnerExpiresAt"),
+      call(vault, va, "recovery"),
+      call(vault, va, "recoveryReadyAt"),
       ...chain.tokens.flatMap((t) => [call(t.address, erc, "balanceOf", [vault]), call(vault, va, "priceUsd", [t.address])]),
     ];
   }, [chain.factory, chain.tokens, owner, stable.address, vault]);
@@ -260,6 +304,26 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
   const [take, setTake] = useState("");
   const [takeSym, setTakeSym] = useState(stable.symbol);
 
+  // A transaction the wallet sent that the chain had not confirmed when the page stopped waiting. The note about
+  // it stays until the vault's reading changes (it went through, or something else happened) or it is hidden.
+  const print = v
+    ? [v.paused, v.operator, v.slipBps, v.limit, v.walletStable, v.vaultOwner, v.pendingOwner, v.recovery, v.recoveryReadyAt, ...v.assets.map((a) => a.raw)].join("|")
+    : "";
+  const [printWhenSent, setPrintWhenSent] = useState<string | null>(null);
+  const { unconfirmed, dismissUnconfirmed } = tx;
+  useEffect(() => {
+    if (!unconfirmed) {
+      if (printWhenSent !== null) setPrintWhenSent(null);
+    } else if (printWhenSent === null) {
+      setPrintWhenSent(print);
+      // The amounts are cleared, so the same transaction cannot be sent a second time by one more click.
+      setDeposit("");
+      setTake("");
+    } else if (print !== printWhenSent) {
+      dismissUnconfirmed();
+    }
+  }, [unconfirmed, print, printWhenSent, dismissUnconfirmed]);
+
   if (!v) {
     return (
       <div className="panel">
@@ -272,8 +336,32 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
     );
   }
 
+  // The factory's list says where a wallet's vault is; only the vault says whose it is. A vault that has moved
+  // to another wallet is never shown as "yours", and nothing can be sent to it from here.
+  if (!sameAddress(v.vaultOwner, owner)) {
+    return (
+      <div className="vaultcol">
+        <div className="panel">
+          <h2>This vault has moved</h2>
+          <p className="hint">
+            The vault that was listed for your wallet,{" "}
+            <a href={explorerAddress(chain.explorerUrl, vault)} target="_blank" rel="noopener noreferrer">
+              {shortAddress(vault)}
+            </a>
+            , now belongs to {shortAddress(v.vaultOwner)}. You cannot withdraw from it, and you should not send money to it. If you did not hand it over or set a
+            recovery wallet yourself, someone else has taken it.
+          </p>
+        </div>
+        <CreateVault chain={chain} canSign={canSign} degraded={degraded} onCreated={onCreated} />
+      </div>
+    );
+  }
+
   const assets = v.assets;
   const takeAsset = assets.find((a) => a.symbol === takeSym) ?? assets[0]!;
+  const nowSeconds = Date.now() / 1000;
+  const offered = v.pendingOwner !== zeroAddress && v.pendingUntil >= nowSeconds;
+  const claimed = v.recoveryReadyAt > 0;
   const dep = parseAmount(deposit, stable.decimals);
   const out = parseAmount(take, takeAsset.decimals);
   const depositOk = dep.ok && dep.raw <= v.walletStable;
@@ -311,6 +399,49 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
         {old && (
           <p className="risknote" role="status">
             Robinhood Chain could not be reached just now. These numbers are from {new Date(kept?.at ?? Date.now()).toLocaleTimeString()}; the page keeps trying.
+          </p>
+        )}
+        {unconfirmed && (
+          <div className="risknote" role="status">
+            <b>Your last transaction is not confirmed yet.</b> It may still go through. Check your wallet's activity before you send it again. This note goes away
+            when the numbers on this page change.
+            <div style={{ marginTop: 10 }}>
+              <button className="btn sm ghost" type="button" onClick={dismissUnconfirmed}>
+                Hide this note
+              </button>
+            </div>
+          </div>
+        )}
+        {claimed && (
+          <div className="risknote" role="alert">
+            <b>A recovery claim is running on this vault.</b> The recovery wallet {shortAddress(v.recovery)} can take the whole vault{" "}
+            {v.recoveryReadyAt > nowSeconds ? `from ${when(v.recoveryReadyAt)}` : "now"}. If you did not start that yourself, stop it now.
+            <div style={{ marginTop: 10 }}>
+              <button className="btn sm" disabled={off} onClick={() => void tx.send("stopclaim", { address: vault, abi: vaultAbi, functionName: "cancelRecovery", args: [] }, "The claim was stopped.")}>
+                {tx.busy === "stopclaim" ? "Check your wallet…" : "Stop the claim"}
+              </button>
+            </div>
+          </div>
+        )}
+        {offered && (
+          <div className="risknote" role="alert">
+            <b>This vault has been offered to {shortAddress(v.pendingOwner)}.</b> That wallet can take the whole vault until {when(v.pendingUntil)}. If you did not
+            offer it yourself, cancel it now.
+            <div style={{ marginTop: 10 }}>
+              <button
+                className="btn sm"
+                disabled={off}
+                onClick={() => void tx.send("canceloffer", { address: vault, abi: vaultAbi, functionName: "transferOwnership", args: [zeroAddress] }, "The offer was cancelled.")}
+              >
+                {tx.busy === "canceloffer" ? "Check your wallet…" : "Cancel the offer"}
+              </button>
+            </div>
+          </div>
+        )}
+        {!claimed && v.recovery !== zeroAddress && (
+          <p className="hint">
+            Recovery wallet: {shortAddress(v.recovery)}. It can start a claim on this vault and take it after the waiting time you set. Anything you do with the vault
+            stops a claim.
           </p>
         )}
         <div className="vtotal">
@@ -360,7 +491,7 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
                 dep.ok &&
                 void tx
                   .send("deposit", { address: stable.address as Address, abi: ERC20_ABI as Abi, functionName: "transfer", args: [vault, dep.raw] }, "Deposited into your vault.")
-                  .then((ok) => ok && setDeposit(""))
+                  .then((result) => result !== "failed" && setDeposit(""))
               }
             >
               {tx.busy === "deposit" ? "Check your wallet…" : "Deposit"}
@@ -395,14 +526,14 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
                 out.ok &&
                 void tx
                   .send("withdraw", { address: vault, abi: vaultAbi, functionName: "withdraw", args: [takeAsset.address, out.raw, owner] }, "Withdrawn to your wallet.")
-                  .then((ok) => ok && setTake(""))
+                  .then((result) => result !== "failed" && setTake(""))
               }
             >
               {tx.busy === "withdraw" ? "Check your wallet…" : "Withdraw"}
             </button>
           </div>
           <small id="v-out-note">
-            {!out.ok && out.error ? out.error : out.ok && !takeOk ? `That is more than the vault holds of ${takeAsset.symbol}.` : out.ok && out.note ? out.note : `It goes to ${shortAddress(owner)}, the wallet you signed in with.`}
+            {!out.ok && out.error ? out.error : out.ok && !takeOk ? `That is more than the vault holds of ${takeAsset.symbol}.` : out.ok && out.note ? out.note : `It goes to ${shortAddress(owner)}, ${ownerIs}.`}
           </small>
         </div>
       </div>
@@ -411,7 +542,14 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
         <h2>Limits the contract enforces</h2>
         <p className="hint">The agent cannot change these. Only your wallet can.</p>
         <div className="ctrl">
-          <LimitSliders limit={shownLimit} slip={shownSlip} setLimit={setLimit} setSlip={setSlip} disabled={off} />
+          <LimitSliders limit={shownLimit} slip={shownSlip} setLimit={setLimit} setSlip={setSlip} disabled={off || old} />
+          {old && (
+            <p className="hint" role="note">
+              Saving limits and switching agent access are off until Robinhood Chain answers again. Both would be built from the numbers above, which may be out of
+              date. Withdraw, pause and revoke still work.
+            </p>
+          )}
+          {degraded && access !== "agent" && <p className="hint">Giving the agent access is off until this site's server answers again.</p>}
           {access === "other" && (
             <p className="risknote" role="note">
               <b>A key that is not Ratinole's agent can trade this vault:</b>{" "}
@@ -422,7 +560,7 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
             </p>
           )}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="btn sm blue" disabled={off || !limitsChanged} onClick={() => void saveLimits()}>
+            <button className="btn sm blue" disabled={off || old || !limitsChanged} onClick={() => void saveLimits()}>
               {tx.busy === "limits" ? "Check your wallet…" : "Save limits"}
             </button>
             <button
@@ -438,7 +576,11 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
               </button>
             )}
             {access !== "agent" && (
-              <button className="btn sm ghost" disabled={off || degraded || v.agentKey === zeroAddress} onClick={() => void setOperator("access", v.agentKey, "Ratinole's agent can trade this vault now.")}>
+              <button
+                className="btn sm ghost"
+                disabled={off || degraded || old || v.agentKey === zeroAddress}
+                onClick={() => void setOperator("access", v.agentKey, "Ratinole's agent can trade this vault now.")}
+              >
                 {tx.busy === "access" ? "Check your wallet…" : access === "none" ? "Restore agent access" : "Switch access to Ratinole's agent"}
               </button>
             )}
@@ -450,20 +592,42 @@ function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainC
 }
 
 function LiveVault({ chain, degraded }: { chain: ChainConfigDTO; degraded: boolean }) {
-  const { me, signIn, signingIn } = useSession();
+  const { me, unreachable, connectWallet, signingIn } = useSession();
   const { address, isConnected } = useAccount();
-  const owner = (me?.address ?? zeroAddress) as Address;
+  // Normally the page is for the wallet that signed in. When the site's server cannot say who is signed in, the
+  // wallet connected in this browser is the only identity there is. That is enough to look at that wallet's own
+  // vault and to take money out of it: every vault action is signed by the wallet and checked by the vault's
+  // contract, never by this site. Nothing that sends money in or grants access is offered in that state.
+  const offline = !me && unreachable;
+  const who = me?.address ?? (offline && isConnected && address ? address : null);
+  const owner = (who ?? zeroAddress) as Address;
   const vaultQ = useReadContract({
     address: chain.factory as Address,
     abi: FACTORY_ABI,
     functionName: "vaultOf",
     args: [owner],
     chainId: CHAIN.id,
-    query: { enabled: !!me, refetchInterval: 20_000 },
+    query: { enabled: !!who, refetchInterval: 20_000 },
   });
-  if (!me) return <ConnectPanel text="Sign in with your wallet to create or manage your vault." />;
-  // Signing needs the same wallet that signed in to be connected in this browser.
-  const canSign = isConnected && address?.toLowerCase() === me.address.toLowerCase();
+  if (!who) {
+    if (!offline) return <ConnectPanel text="Sign in with your wallet to create or manage your vault." />;
+    return (
+      <section>
+        <div className="panel connect">
+          <p>
+            <b>This site's server cannot be reached, so you cannot sign in right now.</b> Connect your wallet to see its vault straight from Robinhood Chain. You can
+            withdraw, pause and revoke. Deposits and new vaults are off until the server answers again.
+          </p>
+          <button className="btn sm" onClick={() => void connectWallet()} disabled={signingIn}>
+            {signingIn ? "Check your wallet…" : "Connect wallet"}
+          </button>
+        </div>
+      </section>
+    );
+  }
+  const limited = degraded || offline;
+  // Changing the vault needs the wallet it is shown for to be connected in this browser.
+  const canSign = isConnected && address?.toLowerCase() === who.toLowerCase();
   // Once the answer is known it is kept: a later poll that fails must not take the vault off the screen, or
   // offer "create a vault" to someone who has one.
   const known = vaultQ.data !== undefined;
@@ -471,21 +635,25 @@ function LiveVault({ chain, degraded }: { chain: ChainConfigDTO; degraded: boole
   return (
     <section>
       <RiskNote cap={chain.limits.maxVaultUsd} trading={chain.trading} />
-      {degraded && (
+      {limited && (
         <p className="risknote" role="status">
-          <b>This site's server cannot be reached.</b> Your vault is shown straight from Robinhood Chain, at the contract address this device saw last time. You can
-          withdraw, pause and revoke. Deposits and new vaults are off until the server answers again.
+          <b>This site's server cannot be reached.</b>{" "}
+          {offline
+            ? "You are not signed in, so this page shows the vault of the wallet connected in this browser, straight from Robinhood Chain"
+            : "Your vault is shown straight from Robinhood Chain"}
+          {degraded ? ", at the contract address this device saw last time" : ""}. You can withdraw, pause and revoke. Deposits and new vaults are off until the
+          server answers again.
         </p>
       )}
       {!canSign && (
         <div className="panel connect" style={{ marginBottom: 20 }}>
           <p>
             {isConnected
-              ? `Your wallet is on another account. Switch it to ${shortAddress(me.address)}, the account you signed in with, to change the vault.`
+              ? `Your wallet is on another account. Switch it to ${shortAddress(who)}, the account you signed in with, to change the vault.`
               : "Your wallet is not connected in this browser. Connect it to change the vault; you can still see it below."}
           </p>
           {!isConnected && (
-            <button className="btn sm" onClick={() => void signIn()} disabled={signingIn}>
+            <button className="btn sm" onClick={() => void connectWallet()} disabled={signingIn}>
               {signingIn ? "Check your wallet…" : "Connect wallet"}
             </button>
           )}
@@ -501,9 +669,17 @@ function LiveVault({ chain, degraded }: { chain: ChainConfigDTO; degraded: boole
             </p>
           </div>
         ) : vault ? (
-          <ManageVault chain={chain} vault={vault} owner={owner} canSign={canSign} degraded={degraded} />
+          <ManageVault
+            chain={chain}
+            vault={vault}
+            owner={owner}
+            ownerIs={offline ? "the wallet connected in this browser" : "the wallet you signed in with"}
+            canSign={canSign}
+            degraded={limited}
+            onCreated={() => void vaultQ.refetch()}
+          />
         ) : (
-          <CreateVault chain={chain} canSign={canSign} degraded={degraded} onCreated={() => void vaultQ.refetch()} />
+          <CreateVault chain={chain} canSign={canSign} degraded={limited} onCreated={() => void vaultQ.refetch()} />
         )}
         <WhoCanDoWhat hint="Enforced by your vault's contract, not by this site." />
       </div>

@@ -4,7 +4,7 @@
  * who has one, or call a server that is down "vaults are not open".
  */
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, parseAbi, toFunctionSelector, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, parseAbi, toFunctionSelector, zeroHash, type Hex } from "viem";
 
 const ME = "0x7a3f00000000000000000000000000000000c1c2";
 const FACTORY = "0xfac70000000000000000000000000000000000aa";
@@ -29,9 +29,13 @@ const chainConfig = {
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-/** The site's own server. `chainDown` makes only the live-trading settings unreachable. */
-async function mockApi(page: Page, opts: { chainDown?: () => boolean } = {}) {
+/**
+ * The site's own server. `chainDown` makes only the live-trading settings unreachable; `allDown` refuses every
+ * call, as when the API process is not running.
+ */
+async function mockApi(page: Page, opts: { chainDown?: () => boolean; allDown?: () => boolean } = {}) {
   await page.route("**/api/**", async (route) => {
+    if (opts.allDown?.()) return route.abort("connectionrefused");
     const url = new URL(route.request().url());
     const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, "")}`;
     if (key === "GET /me") return json(route, { address: ME, maxSizePct: 35, dailyLossCapPct: 3, agentCount: 0, maxAgents: 3 });
@@ -51,7 +55,20 @@ interface ChainState {
   weth: bigint;
   /** 18 decimals; null = the oracle refuses (a stale price). */
   wethPrice: bigint | null;
+  /** Who the vault says owns it. */
+  owner: string;
+  pendingOwner: string;
+  pendingUntil: bigint;
+  recovery: string;
+  recoveryReadyAt: bigint;
+  /** What the chain says about a transaction. A hash not listed here is confirmed at once, as on a fast chain. */
+  receipts: Record<string, "success" | "none">;
+  /** Transactions the chain knows as waiting, by hash. */
+  waiting: Record<string, SentTx>;
+  /** Transactions in the newest block. */
+  inBlock: (SentTx & { hash: string })[];
 }
+type SentTx = { from: string; to: string; nonce: number; input: Hex };
 const healthy = (): ChainState => ({
   down: false,
   hasVault: true,
@@ -61,6 +78,14 @@ const healthy = (): ChainState => ({
   walletUsdg: 40_000_000n, // $40.00
   weth: 50_000_000_000_000_000n, // 0.05 WETH
   wethPrice: 2000n * 10n ** 18n,
+  owner: ME,
+  pendingOwner: ZERO,
+  pendingUntil: 0n,
+  recovery: ZERO,
+  recoveryReadyAt: 0n,
+  receipts: {},
+  waiting: {},
+  inBlock: [],
 });
 
 const MULTICALL = parseAbi([
@@ -87,6 +112,11 @@ function answer(s: ChainState, to: string, data: Hex): Hex | null {
     if (fn === sel("dailyLimitUsd()")) return word("uint256", 200n * 10n ** 18n);
     if (fn === sel("remainingDailyUsd()")) return word("uint256", 180n * 10n ** 18n);
     if (fn === sel("priceUsd(address)")) return s.wethPrice == null ? null : word("uint256", s.wethPrice);
+    if (fn === sel("owner()")) return word("address", s.owner);
+    if (fn === sel("pendingOwner()")) return word("address", s.pendingOwner);
+    if (fn === sel("pendingOwnerExpiresAt()")) return word("uint64", s.pendingUntil);
+    if (fn === sel("recovery()")) return word("address", s.recovery);
+    if (fn === sel("recoveryReadyAt()")) return word("uint64", s.recoveryReadyAt);
   }
   if (fn === sel("balanceOf(address)")) {
     if (same(to, USDG)) return word("uint256", same(arg, VAULT) ? s.vaultUsdg : same(arg, ME) ? s.walletUsdg : 0n);
@@ -103,7 +133,19 @@ async function mockChain(page: Page, s: ChainState) {
     const body = route.request().postDataJSON() as { id: number; method: string; params: [{ to: string; data: Hex }] };
     const reply = (result: unknown) => json(route, { jsonrpc: "2.0", id: body.id, result });
     if (body.method === "eth_chainId") return reply("0x1237");
-    if (body.method === "eth_blockNumber") return reply("0x10");
+    if (body.method === "eth_blockNumber") return reply(BLOCK);
+    const first = (body.params as unknown[])[0] as string;
+    if (body.method === "eth_getTransactionReceipt") {
+      if (s.receipts[first] === "none") return reply(null);
+      return reply({ ...MINED, transactionHash: first, from: ME, to: VAULT, cumulativeGasUsed: "0x5208", gasUsed: "0x5208", effectiveGasPrice: "0x1", contractAddress: null, logs: [], logsBloom: `0x${"0".repeat(512)}`, status: "0x1", type: "0x2" });
+    }
+    if (body.method === "eth_getTransactionByHash") {
+      const t = s.waiting[first];
+      return reply(t ? rpcTx(first, t, false) : null);
+    }
+    if (body.method === "eth_getBlockByNumber") {
+      return reply({ number: BLOCK, hash: MINED.blockHash, parentHash: zeroHash, timestamp: "0x6920f1a0", gasLimit: "0x1c9c380", gasUsed: "0x5208", baseFeePerGas: "0x1", miner: ZERO, transactions: s.inBlock.map((t) => rpcTx(t.hash, t, true)), uncles: [] });
+    }
     if (body.method !== "eth_call") return json(route, { jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "not mocked" } });
     const { to, data } = body.params[0];
     if (data.startsWith(sel("aggregate3((address,bool,bytes)[])"))) {
@@ -118,6 +160,67 @@ async function mockChain(page: Page, s: ChainState) {
     return out == null ? json(route, { jsonrpc: "2.0", id: body.id, error: { code: 3, message: "execution reverted", data: "0x" } }) : reply(out);
   }
 }
+
+const BLOCK = "0x10";
+const MINED = { blockNumber: BLOCK, blockHash: `0x${"b1".repeat(32)}`, transactionIndex: "0x0" };
+/** A transaction as a node reports it: waiting (no block yet) or mined in the newest block. */
+const rpcTx = (hash: string, t: SentTx, mined: boolean) => ({
+  hash,
+  from: t.from,
+  to: t.to,
+  nonce: `0x${t.nonce.toString(16)}`,
+  input: t.input,
+  value: "0x0",
+  gas: "0x30d40",
+  maxFeePerGas: "0x2",
+  maxPriorityFeePerGas: "0x1",
+  type: "0x2",
+  chainId: "0x1237",
+  ...(mined ? MINED : { blockNumber: null, blockHash: null, transactionIndex: null }),
+});
+
+/**
+ * A pretend browser wallet for the account the tests are signed in as, already on Robinhood Chain. It announces
+ * itself the standard way (EIP-6963). Each transaction it is asked to send is handed to `onSend`, which returns
+ * the hash the wallet answers with. Like a real wallet it remembers that this site was approved.
+ */
+async function fakeWallet(page: Page, onSend: (tx: { to: string; data: Hex; from?: string }) => string) {
+  await page.exposeFunction("__walletSend", onSend);
+  await page.addInitScript((account) => {
+    const approved = () => window.localStorage.getItem("__fakeWalletApproved") === "1";
+    const provider = {
+      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+        if (method === "eth_requestAccounts") {
+          window.localStorage.setItem("__fakeWalletApproved", "1");
+          return [account];
+        }
+        if (method === "eth_accounts") return approved() ? [account] : [];
+        if (method === "eth_chainId") return "0x1237";
+        if (method === "wallet_switchEthereumChain" || method === "wallet_addEthereumChain") return null;
+        if (method === "wallet_requestPermissions" || method === "wallet_getPermissions") return [{ parentCapability: "eth_accounts" }];
+        if (method === "eth_sendTransaction") return (window as unknown as { __walletSend: (tx: unknown) => Promise<string> }).__walletSend(params![0]);
+        return null;
+      },
+      on: () => undefined,
+      removeListener: () => undefined,
+    };
+    const icon = "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#6A5ACD"/></svg>');
+    const detail = Object.freeze({ info: { uuid: "1b2c3d4e-0000-4000-8000-0000000000aa", name: "Test Wallet", icon, rdns: "xyz.testwallet" }, provider });
+    const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
+    window.addEventListener("eip6963:requestProvider", announce);
+    announce();
+  }, ME);
+}
+
+/** Connects the pretend wallet from the panel that asks for it. Nothing is signed and the server is not asked. */
+async function connectWallet(page: Page) {
+  await page.locator(".panel.connect").getByRole("button", { name: "Connect wallet" }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect a wallet" });
+  await dialog.getByRole("button", { name: /Test Wallet/ }).click();
+  await expect(dialog).toBeHidden({ timeout: 15_000 });
+}
+
+const hashOf = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 
 /** Makes the page ask again now, as it does by itself every few seconds. */
 const askAgain = (page: Page) => page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
@@ -141,9 +244,12 @@ test.describe("vault page", () => {
     await expect(page.getByRole("button", { name: "Create my vault" })).toHaveCount(0);
     await expect(vault.getByRole("button", { name: "Revoke agent access" })).toBeVisible();
     await expect(vault.getByRole("button", { name: "Restore agent access" })).toHaveCount(0);
-    // The worst case is stated for a window, with the fact that two windows can meet.
-    await expect(vault.getByText("Most a stolen agent key could cost you in one 24-hour window")).toBeVisible();
-    await expect(vault.getByText(/around the end of one it can be twice this/)).toBeVisible();
+    // The figure is for normal conditions and is not called a maximum; what makes it larger is said.
+    await expect(vault.getByText("What a stolen agent key could cost you in one 24-hour window, in normal conditions")).toBeVisible();
+    await expect(vault.locator(".worst b")).toHaveText("$3.60");
+    await expect(vault.getByText(/This is not a maximum\. Two windows can meet, which doubles it\./)).toBeVisible();
+    await expect(vault.getByText(/If the price feed stops updating while the market moves, the loss in a window can be as large as the daily limit times that move\./)).toBeVisible();
+    await expect(vault.getByText(/Most a stolen agent key/)).toHaveCount(0);
   });
 
   test("keeps the last reading on screen when the chain stops answering, and says how old it is", async ({ page }) => {
@@ -246,6 +352,234 @@ test.describe("vault page", () => {
     await vault.locator(".vform").nth(1).getByRole("button", { name: "Max" }).click();
     await expect(out).toHaveValue("150.25");
     await expect(vault.getByText(/It goes to 0x7a3f…c1c2, the wallet you signed in with\./)).toBeVisible();
+  });
+
+  test("a vault that has moved to another wallet is never shown as yours, and cannot be deposited into", async ({ page }) => {
+    // The factory's list still points this wallet at the vault, but the vault says someone else owns it.
+    const chain = healthy();
+    chain.owner = "0xbad0000000000000000000000000000000000bad";
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    await expect(page.getByRole("heading", { name: "This vault has moved" })).toBeVisible();
+    // Addresses read from the chain are shown in their mixed-case form, so they are matched without regard to case.
+    await expect(page.getByText(/now belongs to 0xbad0…0bad\. You cannot withdraw from it, and you should not send money to it/i)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your vault", exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Deposit USDG")).toHaveCount(0);
+    await expect(page.locator(".vtotal")).toHaveCount(0);
+    // The wallet can start again with a vault of its own.
+    await expect(page.getByRole("button", { name: "Create my vault" })).toBeVisible();
+  });
+
+  test("a recovery claim or a hand-over offer on the vault is shown at the top, with the way to stop it", async ({ page }) => {
+    const chain = healthy();
+    chain.recovery = "0x1e5c000000000000000000000000000000001e5c";
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    // A recovery wallet with no claim running is stated, without alarm.
+    await expect(vault.getByText(/Recovery wallet: 0x1e5c…1e5c\./i)).toBeVisible();
+    await expect(vault.getByRole("alert")).toHaveCount(0);
+
+    chain.recoveryReadyAt = BigInt(Math.floor(Date.now() / 1000) + 2 * 86400);
+    chain.pendingOwner = "0x0ffe000000000000000000000000000000000ffe";
+    chain.pendingUntil = BigInt(Math.floor(Date.now() / 1000) + 86400);
+    await askAgain(page);
+    await expect(vault.getByText("A recovery claim is running on this vault.")).toBeVisible({ timeout: 60_000 });
+    await expect(vault.getByText(/The recovery wallet 0x1e5c…1e5c can take the whole vault from /i)).toBeVisible();
+    await expect(vault.getByRole("button", { name: "Stop the claim" })).toBeVisible();
+    await expect(vault.getByText(/This vault has been offered to 0x0ffe…0ffe\./i)).toBeVisible();
+    await expect(vault.getByRole("button", { name: "Cancel the offer" })).toBeVisible();
+  });
+
+  test("with every call to the site's server refused, a returning visitor connects a wallet and withdraws", async ({ page }) => {
+    let down = false;
+    const sent: { to: string; data: Hex }[] = [];
+    await fakeWallet(page, (tx) => (sent.push(tx), hashOf(sent.length)));
+    await mockApi(page, { allDown: () => down });
+    await mockChain(page, healthy());
+    await page.goto("/app/vault");
+    await expect(page.locator(".vtotal")).toContainText("$250.25");
+
+    // Later, on the same device, the API process is down: no session, no settings, no sign-in.
+    down = true;
+    await page.reload();
+    await expect(page.getByText("This site's server cannot be reached, so you cannot sign in right now.")).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator(".vtotal")).toHaveCount(0);
+    await connectWallet(page);
+
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25", { timeout: 30_000 });
+    await expect(page.getByText(/You are not signed in, so this page shows the vault of the wallet connected in this browser, straight from Robinhood Chain, at the contract address this device saw last time\./)).toBeVisible();
+    // Nothing goes in, and no access is granted, while the server cannot confirm the contract's address.
+    await vault.getByLabel("Deposit USDG").fill("5");
+    await expect(vault.getByRole("button", { name: "Deposit", exact: true })).toBeDisabled();
+    await expect(vault.getByText("Deposits are off until this site's server answers again. Withdrawals work.")).toBeVisible();
+    // Money comes out: the withdrawal reaches the wallet, for the vault, to the connected wallet itself.
+    await vault.getByLabel("Withdraw to your wallet").fill("10");
+    await expect(vault.getByText("It goes to 0x7a3f…c1c2, the wallet connected in this browser.")).toBeVisible();
+    const withdraw = vault.getByRole("button", { name: "Withdraw", exact: true });
+    await expect(withdraw).toBeEnabled();
+    await withdraw.click();
+    await expect(page.locator(".toast")).toHaveText("Withdrawn to your wallet.", { timeout: 30_000 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to.toLowerCase()).toBe(VAULT);
+    const call = decodeFunctionData({ abi: parseAbi(["function withdraw(address token, uint256 amount, address to)"]), data: sent[0]!.data });
+    expect(call.args[0].toLowerCase()).toBe(USDG.toLowerCase());
+    expect(call.args[1]).toBe(10_000_000n);
+    expect(call.args[2].toLowerCase()).toBe(ME);
+    // Pause and revoke work too.
+    await expect(vault.getByRole("button", { name: "Pause vault" })).toBeEnabled();
+    await expect(vault.getByRole("button", { name: "Revoke agent access" })).toBeEnabled();
+  });
+
+  test("when the server answers, a signed-out visitor is asked to sign in, as before", async ({ page }) => {
+    await fakeWallet(page, () => hashOf(1));
+    await page.route("**/api/**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/me") return json(route, { error: "unauthorized", message: "Sign in" }, 401);
+      if (path === "/api/public/chain") return json(route, chainConfig);
+      return json(route, { error: "not_found", message: "Not mocked" }, 404);
+    });
+    await mockChain(page, healthy());
+    await page.goto("/app/vault");
+    await expect(page.getByRole("heading", { name: "Connect a wallet" })).toBeVisible();
+    await expect(page.getByText("Sign in with your wallet to create or manage your vault.")).toBeVisible();
+    await expect(page.getByText(/cannot be reached/)).toHaveCount(0);
+    await expect(page.locator(".vtotal")).toHaveCount(0);
+  });
+
+  test("a transaction cancelled in the wallet is not reported as done", async ({ page }) => {
+    const chain = healthy();
+    const sent: { to: string; data: Hex }[] = [];
+    const asked = hashOf(1);
+    const cancel = hashOf(2);
+    await fakeWallet(page, (tx) => {
+      sent.push(tx);
+      // The user then presses "cancel" in the wallet: it sends itself nothing, in the same slot, and that is what the chain runs.
+      chain.receipts[asked] = "none";
+      chain.waiting[asked] = { from: ME, to: VAULT, nonce: 7, input: tx.data };
+      chain.inBlock = [{ hash: cancel, from: ME, to: ME, nonce: 7, input: "0x" }];
+      return asked;
+    });
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25");
+    await connectWallet(page);
+    await vault.getByRole("button", { name: "Pause vault" }).click();
+    const toast = page.locator(".toast");
+    await expect(toast).toHaveText("That transaction was cancelled in your wallet. Nothing changed.", { timeout: 30_000 });
+    expect(sent).toHaveLength(1);
+    await expect(vault.getByText("Not paused")).toBeVisible();
+    await expect(vault.getByRole("button", { name: "Pause vault" })).toBeEnabled();
+  });
+
+  test("a transaction the chain confirms is reported as done", async ({ page }) => {
+    const chain = healthy();
+    await fakeWallet(page, () => {
+      chain.paused = true;
+      return hashOf(1);
+    });
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25");
+    await connectWallet(page);
+    await vault.getByRole("button", { name: "Pause vault" }).click();
+    await expect(page.locator(".toast")).toHaveText("Vault paused. The agent cannot trade it.", { timeout: 30_000 });
+    await expect(vault.getByText("Paused", { exact: true })).toBeVisible();
+    await expect(vault.getByRole("button", { name: "Resume vault" })).toBeVisible();
+  });
+
+  test("while the numbers on screen are old, nothing is built from them: limits and agent access are off, withdraw and pause are not", async ({ page }) => {
+    await page.clock.install();
+    const chain = healthy();
+    chain.operator = ZERO;
+    await fakeWallet(page, () => hashOf(1));
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25");
+    await connectWallet(page);
+    const restore = vault.getByRole("button", { name: "Restore agent access" });
+    const save = vault.getByRole("button", { name: "Save limits" });
+    await expect(restore).toBeEnabled();
+    await vault.locator('input[type="range"]').first().focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(vault.getByText("Daily trading limit $250")).toBeVisible();
+    await expect(save).toBeEnabled();
+
+    // The page's own connection to the chain fails; the wallet's still works.
+    chain.down = true;
+    await page.clock.fastForward(21_000);
+    await expect(vault.getByText(/Robinhood Chain could not be reached just now\. These numbers are from/)).toBeVisible({ timeout: 60_000 });
+    await expect(restore).toBeDisabled();
+    await expect(save).toBeDisabled();
+    await expect(vault.getByText(/Saving limits and switching agent access are off until Robinhood Chain answers again\./)).toBeVisible();
+    await expect(vault.getByRole("button", { name: "Pause vault" })).toBeEnabled();
+    await vault.getByLabel("Withdraw to your wallet").fill("10");
+    await expect(vault.getByRole("button", { name: "Withdraw", exact: true })).toBeEnabled();
+
+    // When the chain answers again, they come back.
+    chain.down = false;
+    chain.vaultUsdg = 100_000_000n;
+    await page.clock.fastForward(21_000);
+    await expect(vault.locator(".vtotal")).toContainText("$200.00", { timeout: 60_000 });
+    await expect(restore).toBeEnabled();
+    await expect(save).toBeEnabled();
+  });
+
+  test("a sent transaction the chain has not confirmed leaves a note and an empty field, not a second send", async ({ page }) => {
+    await page.clock.install();
+    const chain = healthy();
+    const sent: { to: string; data: Hex }[] = [];
+    await fakeWallet(page, (tx) => {
+      sent.push(tx);
+      const hash = hashOf(sent.length);
+      chain.receipts[hash] = "none"; // the chain says nothing about it
+      return hash;
+    });
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25");
+    await connectWallet(page);
+    const field = vault.getByLabel("Withdraw to your wallet");
+    const withdraw = vault.getByRole("button", { name: "Withdraw", exact: true });
+    const note = vault.getByText("Your last transaction is not confirmed yet.");
+    await field.fill("10");
+    await withdraw.click();
+    await expect(page.locator(".toast")).toHaveText("Sent. Waiting for the chain to confirm…", { timeout: 15_000 });
+    await expect(note).toHaveCount(0);
+
+    // A minute and a half later there is still no answer.
+    await page.clock.fastForward(91_000);
+    await expect(note).toBeVisible({ timeout: 30_000 });
+    await expect(vault.getByText(/It may still go through\. Check your wallet's activity before you send it again\./)).toBeVisible();
+    await expect(field).toHaveValue("");
+    await expect(withdraw).toBeDisabled();
+    expect(sent).toHaveLength(1);
+    // The note can be hidden by hand.
+    await vault.getByRole("button", { name: "Hide this note" }).click();
+    await expect(note).toHaveCount(0);
+
+    // A second transaction goes the same way; this time it lands later, and the page's own reading shows it.
+    await field.fill("5");
+    await withdraw.click();
+    await expect(page.locator(".toast")).toHaveText("Sent. Waiting for the chain to confirm…", { timeout: 15_000 });
+    await page.clock.fastForward(91_000);
+    await expect(note).toBeVisible({ timeout: 30_000 });
+    chain.vaultUsdg -= 5_000_000n;
+    await page.clock.fastForward(21_000);
+    await expect(vault.locator(".vtotal")).toContainText("$245.25", { timeout: 60_000 });
+    await expect(note).toHaveCount(0);
+    expect(sent).toHaveLength(2);
   });
 
   test("a server that cannot be reached is not 'vaults are not open'", async ({ page }) => {

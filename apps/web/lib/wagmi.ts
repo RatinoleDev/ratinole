@@ -1,9 +1,7 @@
 import { CHAIN } from "@rationale/config";
 import { defineChain } from "viem";
 import { createConfig, http, injected } from "wagmi";
-
-/** The public RPC, unless a build sets another one (a local fork, for rehearsing live trading with fake money). */
-const rpcUrl = process.env.NEXT_PUBLIC_CHAIN_RPC_URL || CHAIN.rpcUrl;
+import { RPC_URL as rpcUrl } from "./chain";
 
 export const robinhoodChain = defineChain({
   id: CHAIN.id,

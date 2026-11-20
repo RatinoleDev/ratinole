@@ -14,8 +14,20 @@ import { WalletPicker, type PickerStage } from "./WalletPicker";
 type SessionValue = {
   me: MeDTO | null;
   loading: boolean;
+  /**
+   * The server could not be asked who is signed in (it cannot be reached, or it failed). `me` is null then, but
+   * that is not the same as "signed out": nobody knows. Only the Vault page acts on this, to let a person reach
+   * their own vault on-chain while the server is down.
+   */
+  unreachable: boolean;
   signingIn: boolean;
   signIn: () => Promise<boolean>;
+  /**
+   * Connects a wallet to this browser without signing in: no message to sign and no call to the server. It does
+   * not prove anything to the site, and it is not needed for that: every vault action is signed by the wallet
+   * itself and checked by the vault's contract.
+   */
+  connectWallet: () => Promise<boolean>;
   signOut: () => Promise<void>;
   refresh: () => void;
 };
@@ -38,7 +50,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [signingIn, setSigningIn] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [stage, setStage] = useState<PickerStage>(null);
+  const [unreachable, setUnreachable] = useState(false);
   const pending = useRef<((ok: boolean) => void) | null>(null);
+  /** What picking a wallet in the open picker does: sign in, or only connect. */
+  const pickFor = useRef<"signin" | "connect">("signin");
   /** Bumped whenever a sign-in starts or is abandoned, so an abandoned attempt cannot touch the screen later. */
   const attempt = useRef(0);
 
@@ -46,14 +61,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     queryKey: ["me"],
     queryFn: async () => {
       try {
-        return await api<MeDTO>("/me");
+        const me = await api<MeDTO>("/me");
+        setUnreachable(false);
+        return me;
       } catch (e) {
-        if (e instanceof ApiFailure && (e.status === 401 || e.status >= 500 || e.status === 0)) return null;
+        if (e instanceof ApiFailure && e.status === 401) {
+          setUnreachable(false);
+          return null;
+        }
+        if (e instanceof ApiFailure && (e.status >= 500 || e.status === 0)) {
+          setUnreachable(true);
+          return null;
+        }
         throw e;
       }
     },
     retry: false,
     staleTime: 30_000,
+    // While the server cannot be reached, keep asking, so the page recovers by itself when it is back.
+    refetchInterval: unreachable ? 15_000 : false,
   });
 
   /**
@@ -64,6 +90,52 @@ export function SessionProvider({ children }: { children: ReactNode }) {
    * from a connected site are asked again right after connecting. Sign-in never depends on the network step: if
    * the wallet refuses or cannot add the network, the user is told and signing in carries on.
    */
+  /**
+   * Steps 1 to 3 of signing in, which are also all of "connect only": network, connect, network again. Returns
+   * the connected account and a note about the network, or null when the attempt was abandoned meanwhile.
+   */
+  const connectSteps = useCallback(
+    async (connector: Connector | null, label: string, live: () => boolean, show: (step: NonNullable<PickerStage>["step"]) => void) => {
+      let account = isConnected ? address : undefined;
+      const used = account ? activeConnector : (connector ?? undefined);
+      if (!account && !used) throw new Error("No wallet");
+      const provider = used ? ((await used.getProvider().catch(() => null)) as Eip1193 | null) : null;
+
+      // 1. Network first.
+      let chain: ChainOutcome = "no-answer";
+      const early = provider ? ensureRobinhoodChain(provider) : null;
+      if (early) {
+        show("network");
+        chain = await unlessIgnored(early);
+      }
+      if (!live()) return null;
+
+      // 2. Connect.
+      if (!account) {
+        show("connect");
+        const res = await connectAsync({ connector: used! });
+        account = res.accounts[0];
+      }
+      if (!account) throw new Error("No account");
+      if (!live()) return null;
+
+      // 3. Wallets that ignored or refused the network request before connecting are asked once more.
+      if (provider && early && (chain === "no-answer" || chain === "unsupported")) {
+        show("network");
+        if (chain === "no-answer") chain = await unlessIgnored(early, 1500);
+        if (chain === "no-answer" || chain === "unsupported") chain = await unlessIgnored(ensureRobinhoodChain(provider));
+      }
+      if (!live()) return null;
+      // Shown with the final message, so it is not replaced before it can be read.
+      let networkNote = "";
+      if (chain === "already" || chain === "switched") used?.emitter.emit("change", { chainId: CHAIN.id });
+      else if (chain === "rejected") networkNote = ` Switch ${label} to ${CHAIN.name} before trading.`;
+      else if (chain === "unsupported") networkNote = ` ${label} could not switch to ${CHAIN.name}: add the network in your wallet before trading.`;
+      return { account, networkNote };
+    },
+    [activeConnector, address, connectAsync, isConnected],
+  );
+
   const signInWith = useCallback(
     async (connector: Connector | null, label: string): Promise<boolean> => {
       const mine = ++attempt.current;
@@ -71,41 +143,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const show = (step: NonNullable<PickerStage>["step"]) => live() && setStage({ name: label, step });
       setSigningIn(true);
       try {
-        let account = isConnected ? address : undefined;
-        const used = account ? activeConnector : (connector ?? undefined);
-        if (!account && !used) throw new Error("No wallet");
-        const provider = used ? ((await used.getProvider().catch(() => null)) as Eip1193 | null) : null;
-
-        // 1. Network first.
-        let chain: ChainOutcome = "no-answer";
-        const early = provider ? ensureRobinhoodChain(provider) : null;
-        if (early) {
-          show("network");
-          chain = await unlessIgnored(early);
-        }
-        if (!live()) return false;
-
-        // 2. Connect.
-        if (!account) {
-          show("connect");
-          const res = await connectAsync({ connector: used! });
-          account = res.accounts[0];
-        }
-        if (!account) throw new Error("No account");
-        if (!live()) return false;
-
-        // 3. Wallets that ignored or refused the network request before connecting are asked once more.
-        if (provider && early && (chain === "no-answer" || chain === "unsupported")) {
-          show("network");
-          if (chain === "no-answer") chain = await unlessIgnored(early, 1500);
-          if (chain === "no-answer" || chain === "unsupported") chain = await unlessIgnored(ensureRobinhoodChain(provider));
-        }
-        if (!live()) return false;
-        // Shown with the final "Signed in" message, so it is not replaced before it can be read.
-        let networkNote = "";
-        if (chain === "already" || chain === "switched") used?.emitter.emit("change", { chainId: CHAIN.id });
-        else if (chain === "rejected") networkNote = ` Switch ${label} to ${CHAIN.name} before trading.`;
-        else if (chain === "unsupported") networkNote = ` ${label} could not switch to ${CHAIN.name}: add the network in your wallet before trading.`;
+        const connected = await connectSteps(connector, label, live, show);
+        if (!connected) return false;
+        const { account, networkNote } = connected;
 
         // 4. Sign.
         show("sign");
@@ -143,7 +183,38 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [activeConnector, address, connectAsync, isConnected, qc, signMessageAsync, toast],
+    [connectSteps, qc, signMessageAsync, toast],
+  );
+
+  /** Connects the picked wallet and stops there: nothing is signed and the server is not asked anything. */
+  const connectOnly = useCallback(
+    async (connector: Connector, label: string): Promise<boolean> => {
+      const mine = ++attempt.current;
+      const live = () => attempt.current === mine;
+      const show = (step: NonNullable<PickerStage>["step"]) => live() && setStage({ name: label, step });
+      setSigningIn(true);
+      try {
+        const connected = await connectSteps(connector, label, live, show);
+        if (!connected) return false;
+        if (live()) toast(`Wallet connected.${connected.networkNote}`);
+        return true;
+      } catch (e) {
+        if (!live()) return false;
+        if (isUserRejection(e)) toast("Connection cancelled");
+        else if (walletErrorCode(e) === -32002) toast(`${label} is already waiting for your answer. Open your wallet to finish that request.`);
+        else {
+          console.error("Connecting failed", e);
+          toast("The wallet did not connect. Try again.");
+        }
+        return false;
+      } finally {
+        if (live()) {
+          setSigningIn(false);
+          setStage(null);
+        }
+      }
+    },
+    [connectSteps, toast],
   );
 
   /** Closes the picker. Closing it while a wallet request is open abandons that attempt, so the buttons work again. */
@@ -163,19 +234,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (typeof window === "undefined") return false;
     if (isConnected && address) return signInWith(null, activeConnector?.name ?? "your wallet");
     pending.current?.(false);
+    pickFor.current = "signin";
     setPickerOpen(true);
     return new Promise<boolean>((resolve) => {
       pending.current = resolve;
     });
   }, [activeConnector, address, isConnected, signInWith]);
 
+  /** Opens the wallet picker to connect only. Resolves to true once a wallet is connected. */
+  const connectWallet = useCallback(async (): Promise<boolean> => {
+    if (typeof window === "undefined") return false;
+    if (isConnected && address) return true;
+    pending.current?.(false);
+    pickFor.current = "connect";
+    setPickerOpen(true);
+    return new Promise<boolean>((resolve) => {
+      pending.current = resolve;
+    });
+  }, [address, isConnected]);
+
   const onPick = useCallback(
     async (connector: Connector) => {
       const label = connector.id === "injected" ? "Browser wallet" : connector.name;
-      const ok = await signInWith(connector, label);
+      const ok = pickFor.current === "connect" ? await connectOnly(connector, label) : await signInWith(connector, label);
       if (ok) closePicker(true); // on failure the picker stays open to try again or pick another wallet
     },
-    [closePicker, signInWith],
+    [closePicker, connectOnly, signInWith],
   );
 
   const signOut = useCallback(async () => {
@@ -197,8 +281,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value: SessionValue = {
     me: meQuery.data ?? null,
     loading: meQuery.isLoading,
+    unreachable: unreachable && !meQuery.data,
     signingIn,
     signIn,
+    connectWallet,
     signOut,
     refresh: () => void qc.invalidateQueries({ queryKey: ["me"] }),
   };
