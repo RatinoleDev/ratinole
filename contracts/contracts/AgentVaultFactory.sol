@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {AgentVault} from "./AgentVault.sol";
+import {AgentVault, IVaultOwnerHook} from "./AgentVault.sol";
 
 /// @title AgentVaultFactory
+/// @notice Forked from NOUNY's AgentVaultFactory (MIT). Ratinole changes: the admin is set at deployment (a
+///         TimelockController run by a Safe, HANDOFF section 6.2), and `vaultOf` follows a vault when its
+///         ownership moves (section 6.1).
 /// @notice Each wallet creates one AgentVault of its own. The factory holds the default token list
 ///         (tokens, Chainlink feeds, staleness limits and pinned pool fee tiers) and the NOUNY operator
 ///         installed into NEW vaults.
@@ -11,7 +14,7 @@ import {AgentVault} from "./AgentVault.sol";
 ///         The token list is fixed at deployment and can never be changed, so the admin cannot point new
 ///         vaults at a malicious oracle or pool. Only the default operator can be rotated (e.g. after a bot
 ///         key compromise), and that never affects existing vaults — their owners control their own operator.
-contract AgentVaultFactory {
+contract AgentVaultFactory is IVaultOwnerHook {
     address public immutable router;
     address public admin;
     address public pendingAdmin;
@@ -23,14 +26,18 @@ contract AgentVaultFactory {
     uint24[] private _feeTiers;
 
     mapping(address => address) public vaultOf;
+    mapping(address => bool) public isVault;
 
     event VaultCreated(address indexed owner, address vault);
+    event VaultOwnerChanged(address indexed vault, address indexed previousOwner, address indexed newOwner);
     event DefaultOperatorChanged(address indexed previous, address indexed current);
     event AdminTransferStarted(address indexed pendingAdmin);
     event AdminTransferred(address indexed admin);
 
     error NotAdmin();
     error VaultExists(address vault);
+    error NotVault();
+    error ZeroAddress();
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert NotAdmin();
@@ -43,15 +50,17 @@ contract AgentVaultFactory {
         address[] memory tokens_,
         address[] memory feeds_,
         uint32[] memory staleness_,
-        uint24[] memory feeTiers_
+        uint24[] memory feeTiers_,
+        address admin_
     ) {
         require(
             tokens_.length == feeds_.length && feeds_.length == staleness_.length && staleness_.length == feeTiers_.length,
             "length mismatch"
         );
         require(tokens_.length <= 20, "too many tokens");
+        if (router_ == address(0) || admin_ == address(0)) revert ZeroAddress();
         router = router_;
-        admin = msg.sender;
+        admin = admin_;
         defaultOperator = operator_;
         _tokens = tokens_;
         _feeds = feeds_;
@@ -69,7 +78,18 @@ contract AgentVaultFactory {
             )
         );
         vaultOf[msg.sender] = vault;
+        isVault[vault] = true;
         emit VaultCreated(msg.sender, vault);
+    }
+
+    /// @notice Called by a vault when its ownership moves. A wallet still owns at most one vault, so a transfer
+    ///         or recovery to a wallet that already has one reverts.
+    function onOwnerChanged(address previousOwner, address newOwner) external {
+        if (!isVault[msg.sender]) revert NotVault();
+        if (vaultOf[newOwner] != address(0)) revert VaultExists(vaultOf[newOwner]);
+        if (vaultOf[previousOwner] == msg.sender) delete vaultOf[previousOwner];
+        vaultOf[newOwner] = msg.sender;
+        emit VaultOwnerChanged(msg.sender, previousOwner, newOwner);
     }
 
     /// @notice Rotate the operator used for vaults created from now on. Existing vaults are not affected.

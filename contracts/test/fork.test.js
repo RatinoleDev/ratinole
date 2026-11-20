@@ -18,6 +18,7 @@ describe('AgentVault on a mainnet fork', function () {
     const factory = await ethers.deployContract('AgentVaultFactory', [
       cfg.router, operator.address,
       cfg.tokens.map((t) => t.address), cfg.tokens.map((t) => t.feed), cfg.tokens.map((t) => t.maxStaleness), cfg.tokens.map((t) => t.feeTier || 0),
+      (await ethers.getSigners())[0].address,
     ]);
     await factory.connect(owner).createVault(100, ethers.parseUnits('50000', 18)); // 1%, $50k/day
     vault = await ethers.getContractAt('AgentVault', await factory.vaultOf(owner.address));

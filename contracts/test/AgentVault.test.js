@@ -34,7 +34,7 @@ describe('AgentVault', function () {
     await weth.mint(router, W(10_000));
 
     factory = await deploy('AgentVaultFactory', await router.getAddress(), operator.address,
-      [await usdc.getAddress(), await weth.getAddress()], [await fUsdc.getAddress(), await fWeth.getAddress()], [86400, 3600], [0, 500]); // USDC = base, WETH pool pinned to 0.05%
+      [await usdc.getAddress(), await weth.getAddress()], [await fUsdc.getAddress(), await fWeth.getAddress()], [86400, 3600], [0, 500], (await ethers.getSigners())[0].address); // admin = deployer; USDC = base, WETH pool pinned to 0.05%
     await factory.connect(owner).createVault(100, usd(10_000)); // 1% slippage, $10k/day
     vault = await ethers.getContractAt('AgentVault', await factory.vaultOf(owner.address));
     await usdc.mint(vault, U(50_000));

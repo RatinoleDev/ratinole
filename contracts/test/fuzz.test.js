@@ -43,7 +43,7 @@ describe(`AgentVault fuzz (seed ${SEED}, ${RUNS} steps)`, function () {
     const SLIP = 100n; // 1%
     const LIMIT = 50_000n * 10n ** 18n;
     const factory = await dep('AgentVaultFactory', await router.getAddress(), operator.address,
-      [await usdc.getAddress(), await weth.getAddress()], [await fUsd.getAddress(), await fEth.getAddress()], [86400, 7200], [0, 500]);
+      [await usdc.getAddress(), await weth.getAddress()], [await fUsd.getAddress(), await fEth.getAddress()], [86400, 7200], [0, 500], (await ethers.getSigners())[0].address);
     await factory.connect(owner).createVault(SLIP, LIMIT);
     const vault = await ethers.getContractAt('AgentVault', await factory.vaultOf(owner.address));
     await usdc.mint(vault, 100_000n * 10n ** 6n);

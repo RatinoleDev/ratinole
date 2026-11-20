@@ -27,7 +27,7 @@ describe('Review fixes (HEY Research Lab, 0e1396a)', function () {
       await router.setRate(weth, cbbtc, 10n ** 18n);
       factory = await ethers.deployContract('AgentVaultFactory', [await router.getAddress(), operator.address,
         [await usdc.getAddress(), await weth.getAddress(), await cbbtc.getAddress()],
-        [await fUsdc.getAddress(), await fWeth.getAddress(), await fBtc.getAddress()], [DAY, DAY, DAY], [0, 500, 500]]);
+        [await fUsdc.getAddress(), await fWeth.getAddress(), await fBtc.getAddress()], [DAY, DAY, DAY], [0, 500, 500], (await ethers.getSigners())[0].address]);
     });
 
     it('L-1: a vault can be created while a feed is stale (weekend), but swaps still refuse stale prices', async () => {
