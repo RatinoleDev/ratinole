@@ -258,9 +258,12 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
   document.addEventListener("visibilitychange", onVis);
 
   let mood: RobotMood = firstMood;
-  let moodAt = performance.now();
   const pose: Pose = { ...POSES[mood] };
-  let t0 = performance.now();
+  // The robot's own clock. It moves at most 1/20 s per drawn frame, so a stall (shaders compiling, a hidden
+  // tab) pauses the acting instead of skipping it: the first wave is always seen.
+  let clock = 0;
+  let moodAt = 0;
+  let last = performance.now();
   let nextBlink = 1.6;
   let blinkUntil = 0;
   const eyeColor = new Color(LIME);
@@ -341,7 +344,9 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
   let running = false;
   const render = () => {
     const now = performance.now();
-    apply((now - t0) / 1000, (now - moodAt) / 1000);
+    clock += Math.min(0.05, (now - last) / 1000);
+    last = now;
+    apply(clock, clock - moodAt);
     renderer.render(scene, camera);
   };
   function loop() {
@@ -361,16 +366,14 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
     };
     raf = requestAnimationFrame(step);
   }
-  // The first frame compiles the shaders, which can take a moment. Start the clock after it, so the wave is seen.
   render();
-  t0 = moodAt = performance.now();
   loop();
 
   return {
     setMood: (next) => {
       if (next === mood) return;
       mood = next;
-      moodAt = performance.now();
+      moodAt = clock;
       if (!motion) render();
     },
     stop: () => {

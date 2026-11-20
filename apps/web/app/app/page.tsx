@@ -71,7 +71,9 @@ export default function OverviewPage() {
               <div className="connect">
                 <BotNote>
                   {o && o.agentCount > 0
-                    ? "Your agents have not made their first hourly decision yet. The chart fills in as they run."
+                    ? o.latest.length > 0
+                      ? "The chart starts with the second hourly decision. It fills in as your agents run."
+                      : "Your agents have not made their first hourly decision yet. The chart fills in as they run."
                     : "Launch your first agent in Agent Studio. Its results against holding appear here."}
                 </BotNote>
                 {!(o && o.agentCount > 0) && (
