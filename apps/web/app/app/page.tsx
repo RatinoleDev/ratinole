@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Chart } from "../../components/Chart";
 import { DecisionRow } from "../../components/app/DecisionFeed";
 import { ConnectPanel, useSession } from "../../components/app/Session";
+import { BotNote } from "../../components/robot/RobotAvatar";
 import { api } from "../../lib/api";
 import { pct, upDown, usd } from "../../lib/format";
 
@@ -68,11 +69,11 @@ export default function OverviewPage() {
               </>
             ) : (
               <div className="connect">
-                <p className="empty">
+                <BotNote>
                   {o && o.agentCount > 0
                     ? "Your agents have not made their first hourly decision yet. The chart fills in as they run."
                     : "Launch your first agent in Agent Studio. Its results against holding appear here."}
-                </p>
+                </BotNote>
                 {!(o && o.agentCount > 0) && (
                   <Link className="btn blue" href="/app/studio">
                     Open Agent Studio
@@ -87,8 +88,10 @@ export default function OverviewPage() {
             <div className="feed">
               {o && o.latest.length > 0 ? (
                 o.latest.map((d) => <DecisionRow key={d.id} d={d} showAgent />)
+              ) : q.isLoading ? (
+                <p className="empty">Loading…</p>
               ) : (
-                <p className="empty">{q.isLoading ? "Loading…" : "No decisions yet. Agents decide once an hour."}</p>
+                <BotNote>No decisions yet. Agents decide once an hour.</BotNote>
               )}
             </div>
           </div>

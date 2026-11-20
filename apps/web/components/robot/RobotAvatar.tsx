@@ -3,7 +3,7 @@
  * from the agent's name or id, so the same agent always gets the same robot. The mood shows what the agent is
  * doing: watching the market, holding a position, or paused.
  */
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export type AvatarMood = "watch" | "hold" | "sleep";
 
@@ -137,5 +137,15 @@ export function RobotAvatar({
       </g>
       </g>
     </svg>
+  );
+}
+
+/** An empty-state line with the house robot beside it. */
+export function BotNote({ children, mood = "watch" }: { children: ReactNode; mood?: AvatarMood }) {
+  return (
+    <div className="botnote">
+      <RobotAvatar seed="ratinole" size={46} tile house mood={mood} />
+      <p className="empty">{children}</p>
+    </div>
   );
 }

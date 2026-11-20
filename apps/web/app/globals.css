@@ -1010,7 +1010,7 @@ body:has(.appdark){background:#070708}
 .robot3d{position:relative;flex:none;width:204px;height:204px}
 .robot3d::before{content:"";position:absolute;inset:4% -4% -4%;background:radial-gradient(closest-side,rgba(198,244,50,.2),rgba(198,244,50,.045) 58%,transparent);pointer-events:none}
 .robot3d canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .5s ease}
-.robot3d .still{position:absolute;left:50%;top:50%;width:60%;height:auto;transform:translate(-50%,-50%);filter:drop-shadow(0 18px 26px rgba(0,0,0,.5));transition:opacity .5s ease}
+.robot3d .still{position:absolute;left:50%;top:50%;width:76%;height:auto;transform:translate(-50%,-50%);filter:drop-shadow(0 18px 26px rgba(0,0,0,.5));transition:opacity .5s ease}
 .robot3d.ready canvas{opacity:1}
 .robot3d.ready .still{opacity:0}
 .connect.withbot{grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px 18px;padding:14px 30px 14px 12px}
@@ -1036,6 +1036,8 @@ body:has(.appdark){background:#070708}
 @keyframes rbant{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
 @keyframes rbglow{0%,100%{opacity:1}50%{opacity:.45}}
 .agid{display:flex;align-items:center;gap:14px;min-width:0}
+.botnote{display:flex;align-items:center;gap:14px}
+.botnote .empty{max-width:34em}
 .agid>div{min-width:0}
 .lbname{display:inline-flex;align-items:center;gap:12px}
 .stat{display:inline-flex;align-items:center;gap:8px}
@@ -1070,5 +1072,6 @@ body:has(.appdark){background:#070708}
   .agent summary{grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 12px;padding:18px 20px}
   .agent summary .agid,.agent summary .tog{grid-column:1/-1}
   .agent .log{padding:6px 20px 16px}
+  .lb td,.lb th{white-space:nowrap}
 }
 @media (prefers-reduced-motion:reduce){.rbot *,.btbar{animation:none!important}.robot3d canvas,.robot3d .still{transition:none}}

@@ -260,7 +260,7 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
   let mood: RobotMood = firstMood;
   let moodAt = performance.now();
   const pose: Pose = { ...POSES[mood] };
-  const t0 = performance.now();
+  let t0 = performance.now();
   let nextBlink = 1.6;
   let blinkUntil = 0;
   const eyeColor = new Color(LIME);
@@ -361,7 +361,9 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
     };
     raf = requestAnimationFrame(step);
   }
+  // The first frame compiles the shaders, which can take a moment. Start the clock after it, so the wave is seen.
   render();
+  t0 = moodAt = performance.now();
   loop();
 
   return {
