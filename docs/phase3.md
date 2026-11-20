@@ -33,7 +33,7 @@ steps are in [go-live.md](go-live.md).
 Test counts: 80 unit tests, a 2,000-step fuzz test, and 11 fork tests (real
 Uniswap pools and Chainlink feeds on a local copy of the chain, fake money).
 
-Two rounds of internal review of the whole real-money path (contracts, engine, API,
+Three rounds of internal review of the whole real-money path (contracts, engine, API,
 website, owner's scripts) were done on 20 Nov 2026 and their findings fixed. They are
 not an independent audit.
 
@@ -108,6 +108,16 @@ at the moment of the order, and a swap the vault's oracle disagrees with is refu
   own process at start, but it could still read the `.env` file. A KMS is the fix.
 - **One engine process.** Two engines with the same operator key would fight over
   transaction numbers. Nothing enforces "one" beyond the PM2 setup.
+- **An order nobody confirmed** is written off only once the chain's own clock is two
+  minutes past the order's deadline. On a chain that has stopped making blocks, that
+  moment does not come, and the agent places nothing else until it does. This is on
+  purpose: the order is never written off while it could still trade.
+- **A vault received from someone else** keeps their token list and limits. The engine
+  refuses a vault whose settings for the traded tokens differ from the factory's, but a
+  new owner should look at the limits on the Vault page before switching access on.
+- **The last round of fixes** (resuming after tokens were taken out, an emptied vault
+  with an order on record, two readings of node errors) is covered by tests, but was
+  not read again by an independent reviewer.
 
 ## Open decisions
 
