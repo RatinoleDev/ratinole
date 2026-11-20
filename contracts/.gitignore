@@ -2,3 +2,5 @@ node_modules
 artifacts
 cache
 typechain-types
+deployments/hardhat.json
+deployments/localhost.json
