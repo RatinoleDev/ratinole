@@ -249,9 +249,14 @@ export interface ApiError {
   message: string;
 }
 
-/** What the web app needs to know about live trading. `live` is false until the contracts are deployed and set. */
+/**
+ * What the web app needs to know about live trading. `live` is false until the contracts are deployed and set.
+ * `trading` can be false while `live` is true: the owner has paused live trading, so no live agent can start or
+ * trade, but everyone can still see their vault and withdraw.
+ */
 export interface ChainConfigDTO {
   live: boolean;
+  trading: boolean;
   chainId: number;
   explorerUrl: string;
   /** The vault factory; null while live trading is off. */

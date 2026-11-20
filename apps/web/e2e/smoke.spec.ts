@@ -40,6 +40,7 @@ const json = (route: Route, body: unknown, status = 200) => route.fulfill({ stat
 /** What the server says about live trading. Off by default, as on a site with no contracts configured. */
 const chainConfig = (live: boolean) => ({
   live,
+  trading: live,
   chainId: 4663,
   explorerUrl: "https://robinhoodchain.blockscout.com",
   factory: live ? "0xfac70000000000000000000000000000000000aa" : null,

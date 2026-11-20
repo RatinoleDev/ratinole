@@ -75,7 +75,7 @@ describe.skipIf(!hasDb)("live mode", () => {
     app = await makeApp().app;
     const { cookie, address } = await signIn(app);
     const chain = (await app.inject({ method: "GET", url: "/api/public/chain" })).json();
-    expect(chain).toMatchObject({ live: false, factory: null, operator: null, chainId: 4663 });
+    expect(chain).toMatchObject({ live: false, trading: false, factory: null, operator: null, chainId: 4663 });
     expect(chain.tokens.map((t: { symbol: string }) => t.symbol)).toEqual(["WETH", "cbBTC"]);
     const user = await prisma.user.findUniqueOrThrow({ where: { address } });
     const bt = await doneBacktest(user.id);
@@ -89,6 +89,7 @@ describe.skipIf(!hasDb)("live mode", () => {
     await withVault();
     expect((await app.inject({ method: "GET", url: "/api/public/chain" })).json()).toMatchObject({
       live: true,
+      trading: true,
       factory: FACTORY,
       operator: OPERATOR,
       stable: { symbol: "USDG", decimals: 6 },
@@ -139,6 +140,36 @@ describe.skipIf(!hasDb)("live mode", () => {
       expect(res.json().message.length).toBeGreaterThan(20);
       expect(await prisma.agent.count()).toBe(0);
     }
+  });
+
+  it("two launches sent together cannot both get through", async () => {
+    const s = await withVault();
+    const both = await Promise.all([s.launch(), s.launch()]);
+    expect(both.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    expect(await prisma.agent.count({ where: { mode: "live" } })).toBe(1);
+    // The lock is released afterwards: the usual refusal comes back, not "busy".
+    expect((await s.launch()).json()).toMatchObject({ error: "live_limit" });
+  });
+
+  it("when the owner pauses live trading, vaults stay reachable but nothing starts or resumes", async () => {
+    const first = await makeApp().app;
+    const session = await signIn(first);
+    const vaults = pretendVaults(session.address);
+    app = await makeApp({ vaults: vaults.reader, env: { ...env, liveTradingPaused: true } }).app;
+    // The site still knows the factory, so the Vault page keeps working for everyone.
+    expect((await app.inject({ method: "GET", url: "/api/public/chain" })).json()).toMatchObject({ live: true, trading: false, factory: FACTORY });
+    const user = await prisma.user.findUniqueOrThrow({ where: { address: session.address } });
+    const bt = await doneBacktest(user.id);
+    const res = await app.inject({ method: "POST", url: "/api/agents", headers: { cookie: session.cookie }, payload: { backtestId: bt.id, mode: "live" } });
+    expect(res.json()).toMatchObject({ error: "live_paused" });
+    expect(res.json().message).toMatch(/you can withdraw at any time/);
+    // A live agent that exists is not counted as missing its hours while trading is paused.
+    const agent = await prisma.agent.create({
+      data: { userId: user.id, name: "Old", sentence: "s", plan: plan as unknown as Prisma.InputJsonValue, params: {}, market: "ETH", mode: "live", vault: VAULT, startingCash: 100, maxSizePct: 35, dailyLossCapPct: 3, owedFrom: new Date(Date.now() - 5 * HOUR_MS), status: "paused" },
+    });
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${agent.id}`, headers: { cookie: session.cookie }, payload: { status: "active" } })).json()).toMatchObject({ error: "live_paused" });
+    await prisma.agent.update({ where: { id: agent.id }, data: { status: "active" } });
+    expect((await app.inject({ method: "GET", url: "/api/health" })).json()).toMatchObject({ missedHours: 0, activeAgents: 0 });
   });
 
   it("does not count a speck of a token, or a token the oracle has no price for", async () => {

@@ -13,13 +13,15 @@ import { api } from "../../lib/api";
 type ModeValue = {
   mode: AgentMode;
   setMode: (m: AgentMode) => void;
-  /** Live trading is open on this site. */
+  /** The vault screens are available: the contracts are deployed and this site knows them. */
   liveOn: boolean;
+  /** Live agents can be started and are trading. False while the owner has paused live trading. */
+  trading: boolean;
   chain: ChainConfigDTO | null;
 };
 
 const KEY = "ratinole:mode";
-const ModeContext = createContext<ModeValue>({ mode: "paper", setMode: () => undefined, liveOn: false, chain: null });
+const ModeContext = createContext<ModeValue>({ mode: "paper", setMode: () => undefined, liveOn: false, trading: false, chain: null });
 
 export const useMode = () => useContext(ModeContext);
 
@@ -52,5 +54,5 @@ export function ModeProvider({ children }: { children: ReactNode }) {
     [liveOn],
   );
 
-  return <ModeContext.Provider value={{ mode, setMode, liveOn, chain }}>{children}</ModeContext.Provider>;
+  return <ModeContext.Provider value={{ mode, setMode, liveOn, trading: liveOn && !!chain?.trading, chain }}>{children}</ModeContext.Provider>;
 }

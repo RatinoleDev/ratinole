@@ -122,7 +122,14 @@ function VaultPreview() {
   );
 }
 
-function RiskNote({ cap }: { cap: number | null }) {
+function RiskNote({ cap, trading }: { cap: number | null; trading: boolean }) {
+  if (!trading) {
+    return (
+      <p className="risknote" role="note">
+        <b>Live trading is paused.</b> No agent is trading right now. Your vault is still yours: you can see it and withdraw from it at any time.
+      </p>
+    );
+  }
   return (
     <p className="risknote" role="note">
       <b>Real money, beta.</b> The vault contracts have not had an independent security audit yet. Only deposit money you can afford to lose
@@ -400,7 +407,7 @@ function LiveVault({ chain }: { chain: ChainConfigDTO }) {
   const vault = vaultQ.data && vaultQ.data !== zeroAddress ? (vaultQ.data as Address) : null;
   return (
     <section>
-      <RiskNote cap={chain.limits.maxVaultUsd} />
+      <RiskNote cap={chain.limits.maxVaultUsd} trading={chain.trading} />
       {!canSign && (
         <div className="panel connect" style={{ marginBottom: 20 }}>
           <p>

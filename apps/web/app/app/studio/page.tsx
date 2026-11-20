@@ -51,7 +51,7 @@ export default function StudioPage() {
   const [starting, setStarting] = useState(false);
   const [btError, setBtError] = useState<string | null>(null);
   const [launching, setLaunching] = useState(false);
-  const { liveOn, setMode } = useMode();
+  const { trading: liveOn, setMode } = useMode();
   /** The real-money confirmation: shown, agreed to, and what the server said if it refused. */
   const [liveAsk, setLiveAsk] = useState(false);
   const [agree, setAgree] = useState(false);

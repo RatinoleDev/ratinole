@@ -7,7 +7,7 @@
  *   node scripts/go-live.mjs safe 0xYou[,0xOther]   create your Safe (the admin of the contracts)
  *   node scripts/go-live.mjs deploy 0xSafeAddress   deploy the contracts to Robinhood Chain
  *   node scripts/go-live.mjs open                   turn live trading on for this site
- *   node scripts/go-live.mjs close                  turn it off again (vaults stay where they are)
+ *   node scripts/go-live.mjs close                  pause live trading (everyone can still see and empty their vault)
  *
  * Keys come from .env (scripts/keys.mjs creates them). They are passed to the deploy tool in memory and are
  * never printed. Add `--network localhost` to rehearse against a local fork with fake money.
@@ -86,7 +86,8 @@ if (cmd === "status") {
     const onChain = await pub.readContract({ address: d.factory, abi: [{ type: "function", name: "defaultOperator", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }], functionName: "defaultOperator" });
     console.log(`Factory's operator:        ${onChain}${operator && onChain.toLowerCase() === operator.toLowerCase() ? " (matches this server's key)" : " (DOES NOT match this server's operator key)"}`);
   }
-  console.log(`Live trading on this site: ${open ? `OPEN (factory ${open})` : "closed"}`);
+  const paused = /^(1|true|yes)$/i.test(envGet("LIVE_TRADING_PAUSED") ?? "");
+  console.log(`Live trading on this site: ${!open ? "not opened yet" : paused ? `PAUSED (vaults stay reachable; factory ${open})` : `OPEN (factory ${open})`}`);
 } else if (cmd === "safe") {
   const owners = (arg ?? "").split(",").filter(Boolean);
   if (!owners.length || !owners.every(isAddress)) fail("Give the wallet(s) that will own the Safe: node scripts/go-live.mjs safe 0xYourWallet[,0xSecondSigner]");
@@ -112,11 +113,13 @@ if (cmd === "status") {
   if ((await pub.getBalance({ address: operator })) === 0n) fail(`The agent's address ${operator} holds no ETH, so it could not pay for a single trade. Send it a little ETH on Robinhood Chain first.`);
   await confirm("OPEN", "This opens live trading on the site for EVERYONE: any visitor can create a vault and trade real money.\nThe contracts have not had an independent security audit.");
   envSet("LIVE_FACTORY_ADDRESS", d.factory);
+  envSet("LIVE_TRADING_PAUSED", "");
   if (!mainnet) envSet("LIVE_RPC_URL", RPC);
   console.log(`\nSet LIVE_FACTORY_ADDRESS=${d.factory} in .env.\nRestart to apply:  pm2 reload ecosystem.config.cjs --update-env`);
 } else if (cmd === "close") {
-  envSet("LIVE_FACTORY_ADDRESS", "");
-  console.log("Live trading is closed on this site after a restart:  pm2 reload ecosystem.config.cjs --update-env\nVaults and their money stay on-chain; owners can still withdraw with any wallet tool.");
+  // The factory stays configured on purpose: taking it away would hide people's own vaults from them.
+  envSet("LIVE_TRADING_PAUSED", "1");
+  console.log("Live trading is paused after a restart:  pm2 reload ecosystem.config.cjs --update-env\nNo live agent will start or trade. Everyone can still see their vault on the site and withdraw from it.\nOpen again with: node scripts/go-live.mjs open");
 } else {
   fail("Usage: node scripts/go-live.mjs <status|safe|deploy|open|close> [address] [--network localhost]");
 }

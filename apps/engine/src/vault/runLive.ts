@@ -24,40 +24,47 @@ import { OrderPendingError, type SwapOutcome, type SwapRequest, type VaultChain 
 const DUST_USD = 1;
 /** A move of less than this between two decisions is rounding, not a deposit or a withdrawal. */
 const FLOW_MIN_USD = 0.01;
-/** An order recorded but without a transaction is given this long to show up before it counts as never sent. */
+/**
+ * An order with no transaction on record was never signed, so nothing was sent. It is given this long before it
+ * is closed as "not sent", in case another worker is in the middle of signing it; closing it stops that worker.
+ */
 const UNSENT_GRACE_MS = 3 * 60_000;
-/** A sent order the chain still does not know after this long counts as dropped. */
+/** A signed order the chain still does not know after this long counts as dropped. */
 const DROPPED_AFTER_MS = 15 * 60_000;
+
+/** Another worker closed the order while this one was preparing it. Nothing was sent. */
+class OrderWithdrawnError extends Error {}
 
 const lower = (a: string) => a.toLowerCase() as Address;
 
-function requestOf(o: Pick<LiveOrder, "vault" | "tokenIn" | "tokenOut" | "amountIn">, feeTier: number): SwapRequest {
-  return { vault: lower(o.vault), tokenIn: lower(o.tokenIn), tokenOut: lower(o.tokenOut), feeTier, amountIn: BigInt(o.amountIn) };
-}
-
-/** Finish an order left open by an earlier attempt. Throws OrderPendingError while its fate is not known yet. */
-async function settleOpenOrder(order: LiveOrder, feeTier: number, chain: VaultChain, now: number): Promise<SwapOutcome> {
+/**
+ * Finish an order left open by an earlier attempt. A transaction's hash is always written down before it is sent,
+ * so the hash alone says what happened. Throws OrderPendingError while that is not known yet.
+ */
+async function settleOpenOrder(order: LiveOrder, chain: VaultChain, now: number): Promise<SwapOutcome> {
   const age = now - order.createdAt.getTime();
-  const req = requestOf(order, feeTier);
-  if (order.txHash) {
-    const known = await chain.outcomeOf(order.txHash as Hex, req.vault);
-    if (known) return known;
-    if (age < DROPPED_AFTER_MS) throw new OrderPendingError(`Order ${order.txHash} is not confirmed yet`);
+  if (!order.txHash) {
+    if (age < UNSENT_GRACE_MS) throw new OrderPendingError("An order is still being prepared");
+    return { ok: false, reason: "the order was not sent" };
   }
-  // No transaction on record, or one the chain never saw: look for the swap itself.
-  const found = await chain.findSwap(req, BigInt(order.fromBlock));
-  if (found) return found;
-  if (age < UNSENT_GRACE_MS) throw new OrderPendingError("An order may still be on its way");
-  return { ok: false, reason: order.txHash ? "the chain never confirmed the order" : "the order was not sent", txHash: (order.txHash as Hex | null) ?? undefined };
+  const known = await chain.outcomeOf(order.txHash as Hex, lower(order.vault));
+  if (known) return known;
+  if (age < DROPPED_AFTER_MS) throw new OrderPendingError(`Order ${order.txHash} is not confirmed yet`);
+  return { ok: false, reason: "the chain never confirmed the order", txHash: order.txHash as Hex };
 }
 
-async function closeOrder(prisma: EngineDeps["prisma"], id: string, out: SwapOutcome) {
-  await prisma.liveOrder.update({
-    where: { id },
+/**
+ * Closes an order that is still open. False when another worker got there first. An order may only be closed as
+ * never signed (`unsigned`) while it still has no transaction: a worker that has just signed it wins.
+ */
+async function closeOrder(prisma: EngineDeps["prisma"], id: string, out: SwapOutcome, unsigned = false): Promise<boolean> {
+  const done = await prisma.liveOrder.updateMany({
+    where: { id, status: "pending", ...(unsigned ? { txHash: null } : {}) },
     data: out.ok
       ? { status: "done", txHash: out.txHash, amountOut: out.amountOut.toString(), error: null }
       : { status: "failed", error: out.reason, ...(out.txHash ? { txHash: out.txHash } : {}) },
   });
+  return done.count === 1;
 }
 
 /** The engine stops a live agent itself when its vault can no longer be traded, and says why. */
@@ -128,8 +135,9 @@ export async function runLiveAgentHour(
   let outcome: SwapOutcome | null = null;
   if (order) {
     if (order.status === "pending") {
-      outcome = await settleOpenOrder(order, snap.feeTier, chain, now);
-      await closeOrder(prisma, order.id, outcome);
+      outcome = await settleOpenOrder(order, chain, now);
+      // If another worker closed it in the meantime, its verdict stands: start this hour again from the record.
+      if (!(await closeOrder(prisma, order.id, outcome, !order.txHash))) throw new OrderPendingError("The order was settled by another worker");
     } else if (order.status === "done" && order.txHash && order.amountOut) {
       outcome = { ok: true, txHash: order.txHash as Hex, amountIn: BigInt(order.amountIn), amountOut: BigInt(order.amountOut) };
     } else {
@@ -215,12 +223,22 @@ export async function runLiveAgentHour(
         };
         const fromBlock = await chain.blockNumber();
         order = await prisma.liveOrder.create({
-          data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString() },
+          // Stamped with the engine's own clock, the one every later check of this order's age uses.
+          data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString(), createdAt: new Date(now) },
         });
         const orderId = order.id;
-        outcome = await chain.swap(req, async (txHash) => {
-          await prisma.liveOrder.update({ where: { id: orderId }, data: { txHash } });
-        });
+        try {
+          outcome = await chain.swap(req, async (txHash) => {
+            // Only an order that is still open and has no transaction yet may be sent. If someone closed it as
+            // "not sent" while this worker was slow, sending now would put a trade behind a failed record.
+            const mine = await prisma.liveOrder.updateMany({ where: { id: orderId, status: "pending", txHash: null }, data: { txHash } });
+            if (mine.count !== 1) throw new OrderWithdrawnError(`Order ${orderId} was closed before it was sent`);
+          });
+        } catch (err) {
+          if (!(err instanceof OrderWithdrawnError)) throw err;
+          const closed = await prisma.liveOrder.findUniqueOrThrow({ where: { id: orderId } });
+          outcome = { ok: false, reason: closed.error ?? "the order was not sent" };
+        }
         await closeOrder(prisma, orderId, outcome);
         log(outcome.ok ? "info" : "warn", "live order", { agentId, side: want.fill.side, ok: outcome.ok, txHash: outcome.txHash, reason: outcome.ok ? undefined : outcome.reason });
       }
@@ -298,7 +316,15 @@ export async function runLiveAgentHour(
         maxDrawdownPct: maxDd,
       },
     });
-    await tx.agent.update({ where: { id: agentId }, data: { startingCash: newBasis, holdEntryPrice: holdEntry } });
+    await tx.agent.update({
+      where: { id: agentId },
+      data: {
+        startingCash: newBasis,
+        holdEntryPrice: holdEntry,
+        // Hours missed while the engine was down are never traded or filled in later, so they stop being owed.
+        ...(!settling && fresh.owedFrom.getTime() < hour && lastHour !== hour - HOUR_MS ? { owedFrom: new Date(hour) } : {}),
+      },
+    });
     return true;
   });
   if (!saved) {

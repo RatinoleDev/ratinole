@@ -41,10 +41,13 @@ class PretendChain implements VaultChain {
   /** How many times an order was asked for. */
   asked = 0;
   refuse: string | null = null;
-  /** "afterHash": the connection drops after the order is sent and its hash stored. "beforeHash": before. */
-  drop: "afterHash" | "beforeHash" | null = null;
-  /** The chain does not (yet) know these transactions. */
-  hidden = new Set<string>();
+  /** "afterSend": the order lands, but the connection drops before the answer. "lost": it never reaches the chain. */
+  drop: "afterSend" | "lost" | null = null;
+  /** Runs after the order is prepared and before its hash is handed over, like a slow worker. */
+  beforeSign: (() => Promise<void>) | null = null;
+  /** The chain cannot be asked about transactions right now. */
+  lookupDown = false;
+  private nonce = 0;
 
   async blockNumber() {
     return this.block++;
@@ -52,7 +55,7 @@ class PretendChain implements VaultChain {
   async snapshot(): Promise<VaultSnapshot> {
     return { owner: this.owner, operator: this.vaultOperator, paused: this.paused, stable: this.stable, token: this.token, tradable: this.tradable, feeTier: this.feeTier };
   }
-  private execute(req: SwapRequest): Extract<SwapOutcome, { ok: true }> {
+  private execute(req: SwapRequest, txHash: Hex): Extract<SwapOutcome, { ok: true }> {
     const fee = this.feeTier / 1_000_000;
     const buying = req.tokenIn === LIVE_STABLE.address;
     let amountOut: bigint;
@@ -65,27 +68,25 @@ class PretendChain implements VaultChain {
       this.token -= req.amountIn;
       this.stable += amountOut;
     }
-    const out = { ok: true as const, txHash: `0x${(this.done.length + 1).toString(16).padStart(64, "0")}` as Hex, amountIn: req.amountIn, amountOut };
+    const out = { ok: true as const, txHash, amountIn: req.amountIn, amountOut };
     this.done.push({ req, out });
     return out;
   }
-  async swap(req: SwapRequest, onSent: (h: Hex) => Promise<void>): Promise<SwapOutcome> {
+  /** Like the real client: the hash exists, and is handed over, before anything is sent. */
+  async swap(req: SwapRequest, onSigned: (h: Hex) => Promise<void>): Promise<SwapOutcome> {
     this.asked++;
     if (this.refuse) return { ok: false, reason: this.refuse };
-    const out = this.execute(req);
-    if (this.drop === "beforeHash") throw new OrderPendingError("dropped");
-    await onSent(out.txHash);
-    if (this.drop === "afterHash") throw new OrderPendingError("dropped");
+    const txHash = `0x${(++this.nonce).toString(16).padStart(64, "0")}` as Hex;
+    await this.beforeSign?.();
+    await onSigned(txHash);
+    if (this.drop === "lost") throw new OrderPendingError("dropped");
+    const out = this.execute(req, txHash);
+    if (this.drop === "afterSend") throw new OrderPendingError("dropped");
     return out;
   }
   async outcomeOf(txHash: Hex): Promise<SwapOutcome | null> {
-    if (this.hidden.has(txHash)) return null;
+    if (this.lookupDown) throw new Error("rpc down");
     return this.done.find((d) => d.out.txHash === txHash)?.out ?? null;
-  }
-  async findSwap(req: SwapRequest): Promise<SwapOutcome | null> {
-    // Like the chain, addresses match whatever their letter case.
-    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-    return this.done.find((d) => same(d.req.tokenIn, req.tokenIn) && d.req.amountIn === req.amountIn && !this.hidden.has(d.out.txHash))?.out ?? null;
   }
 }
 
@@ -190,11 +191,16 @@ describe.skipIf(!hasDb)("live agents", () => {
 
   it("a crash after the order was sent finishes that order on retry and never sends a second one", async () => {
     const chain = new PretendChain();
-    chain.drop = "afterHash";
+    chain.drop = "afterSend";
     const agent = await launch(chain);
     await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
     expect(await decisions(agent.id)).toHaveLength(0);
     expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "pending", txHash: chain.done[0]!.out.txHash });
+    // While the chain cannot be asked, nothing is concluded.
+    chain.lookupDown = true;
+    await expect(run(chain, agent.id, H0, 18)).rejects.toThrow(/rpc down/);
+    expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "pending" });
+    chain.lookupDown = false;
 
     chain.drop = null;
     expect(await run(chain, agent.id, H0, 4)).toMatchObject({ decided: 1 });
@@ -206,17 +212,37 @@ describe.skipIf(!hasDb)("live agents", () => {
     expect(d!.qtyAfter).toBeCloseTo(fromUnits(chain.token, 18), 12);
   });
 
-  it("a crash before the transaction was written down finds the swap on the chain instead of sending again", async () => {
+  it("an order that was signed but never reached the chain is waited for, then recorded as never confirmed, and not sent again", async () => {
     const chain = new PretendChain();
-    chain.drop = "beforeHash";
+    chain.drop = "lost";
     const agent = await launch(chain);
     await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
-    expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "pending", txHash: null });
+    const open = await prisma.liveOrder.findFirstOrThrow();
+    expect(open).toMatchObject({ status: "pending" });
+    expect(open.txHash).toMatch(/^0x/);
 
     chain.drop = null;
-    await run(chain, agent.id, H0, 3);
+    // Still inside the wait: nothing is concluded and nothing is sent.
+    await expect(run(chain, agent.id, H0, 10)).rejects.toThrow(OrderPendingError);
+    await run(chain, agent.id, H0, 18);
     expect(chain.asked).toBe(1);
-    expect((await decisions(agent.id))[0]).toMatchObject({ action: "buy", txHash: chain.done[0]!.out.txHash });
+    expect(chain.done).toHaveLength(0);
+    const [d] = await decisions(agent.id);
+    expect(d).toMatchObject({ action: "hold", execError: "the chain never confirmed the order", cashAfter: 1000, qtyAfter: 0 });
+    expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "failed" });
+  });
+
+  it("an order another worker already closed as not sent is never sent", async () => {
+    const chain = new PretendChain();
+    const agent = await launch(chain);
+    // While this worker is still preparing the order, another one gives up on it.
+    chain.beforeSign = async () => {
+      await prisma.liveOrder.updateMany({ where: { agentId: agent.id }, data: { status: "failed", error: "the order was not sent" } });
+    };
+    await run(chain, agent.id, H0);
+    expect(chain.done).toHaveLength(0);
+    expect(chain.stable).toBe(usdg(1000));
+    expect((await decisions(agent.id))[0]).toMatchObject({ action: "hold", execError: "the order was not sent", txHash: null });
   });
 
   it("an order that never reached the chain is waited for, then recorded as not sent, without a new order", async () => {
@@ -328,7 +354,7 @@ describe.skipIf(!hasDb)("live agents", () => {
 
   it("an order left open in an earlier hour is booked for that hour before the next decision", async () => {
     const chain = new PretendChain();
-    chain.drop = "afterHash";
+    chain.drop = "afterSend";
     const agent = await launch(chain);
     await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
     chain.drop = null;

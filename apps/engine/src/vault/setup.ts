@@ -8,6 +8,10 @@ export function liveChainFromEnv(): VaultChain | null {
   const key = env.operatorKey();
   const factory = env.liveFactory();
   if (!key && !factory) return null;
+  if (env.liveTradingPaused()) {
+    log("warn", "live trading is paused (LIVE_TRADING_PAUSED): live agents are left alone");
+    return null;
+  }
   if (!key || !factory) {
     log("warn", "live trading is off: set both OPERATOR_PRIVATE_KEY and LIVE_FACTORY_ADDRESS to turn it on");
     return null;

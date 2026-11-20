@@ -95,6 +95,7 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
     }
     return {
       live: !!deps.vaults,
+      trading: !!deps.vaults && !deps.env.liveTradingPaused,
       chainId: CHAIN.id,
       explorerUrl: CHAIN.explorerUrl,
       factory: deps.vaults?.factory ?? null,
@@ -196,7 +197,9 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
       () => [null, null] as const,
     );
     const lastDue = new Date(Math.floor((now() - GRACE_MS) / HOUR_MS) * HOUR_MS);
-    const agents = await deps.prisma.agent.findMany({ where: { status: "active" }, select: { id: true, owedFrom: true } });
+    // Live agents are only expected to decide while live trading is open on this server.
+    const liveRuns = !!deps.vaults && !deps.env.liveTradingPaused;
+    const agents = await deps.prisma.agent.findMany({ where: { status: "active", ...(liveRuns ? {} : { mode: "paper" }) }, select: { id: true, owedFrom: true } });
     let missedHours = 0;
     for (const a of agents) {
       if (a.owedFrom > lastDue) continue;

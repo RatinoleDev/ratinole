@@ -103,7 +103,7 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
 
    It asks you to type `OPEN`. From then on any visitor can create a vault and trade real money.
 
-To close it again (vaults and their money stay on-chain, and owners can always withdraw):
+To pause it (no live agent starts or trades; everyone can still see their vault on the site and withdraw):
 
 ```bash
 node scripts/go-live.mjs close

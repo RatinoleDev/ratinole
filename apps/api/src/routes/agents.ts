@@ -31,6 +31,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
   async function checkVault(user: User, market: string, launching: boolean): Promise<LiveCheck> {
     const no = (status: number, error: string, message: string): LiveCheck => ({ ok: false, status, error, message });
     if (!deps.vaults) return no(409, "live_off", "Live trading is not open yet.");
+    if (deps.env.liveTradingPaused) return no(409, "live_paused", "Live trading is paused for now. Your vault is still yours: you can withdraw at any time on the Vault page.");
     if (!isMarketId(market)) return no(409, "unsupported_market", "This market cannot be traded live yet.");
     let info;
     let operator;
@@ -76,6 +77,13 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     if (!bt || bt.userId !== user.id) return sendError(reply, 404, "not_found", "No such backtest.");
     if (bt.status !== "done" || !bt.params) return sendError(reply, 409, "backtest_not_done", "Wait for the backtest to finish before launching.");
     const live = body.data.mode === "live";
+    // One launch at a time per wallet: two requests sent together must not both pass the limits below. The lock
+    // is held in Redis for the length of this request and released at the end.
+    const lockKey = `lock:launch:${user.id}`;
+    if ((await deps.redis.set(lockKey, "1", "EX", 30, "NX")) !== "OK") {
+      return sendError(reply, 409, "busy", "Another launch from this wallet is still in progress. Try again in a moment.");
+    }
+    const launch = async () => {
     const existing = await deps.prisma.agent.findMany({ where: { userId: user.id, status: { not: "archived" } }, select: { name: true, mode: true } });
     const sameMode = existing.filter((e) => (e.mode === "live") === live).length;
     if (live && sameMode >= LIVE.maxAgentsPerVault) {
@@ -128,6 +136,12 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
       include: { state: true },
     });
     return reply.code(201).send(agentDTO(agent, null, 0));
+    };
+    try {
+      return await launch();
+    } finally {
+      await deps.redis.del(lockKey).catch(() => undefined);
+    }
   });
 
   app.get<{ Querystring: Record<string, string> }>("/agents", async (req, reply) => {

@@ -163,7 +163,7 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
 
 export default function AgentsPage() {
   const { me } = useSession();
-  const { mode } = useMode();
+  const { mode, trading } = useMode();
   const q = useQuery({
     queryKey: ["agents", mode],
     queryFn: () => api<AgentDTO[]>(`/agents?mode=${mode}`),
@@ -198,6 +198,11 @@ export default function AgentsPage() {
     );
   return (
     <section>
+      {mode === "live" && !trading && (
+        <p className="risknote" role="note">
+          <b>Live trading is paused.</b> Live agents are not deciding or trading right now. You can still withdraw from your vault at any time.
+        </p>
+      )}
       {list.map((a, i) => (
         <AgentCard key={a.id} agent={a} first={i === 0} />
       ))}

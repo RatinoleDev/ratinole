@@ -10,7 +10,9 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  encodeFunctionData,
   http,
+  keccak256,
   parseEventLogs,
   type Hex,
   type TransactionReceipt,
@@ -48,12 +50,14 @@ export interface VaultChain {
   readonly operator: Address;
   blockNumber(): Promise<bigint>;
   snapshot(vault: Address, token: Address): Promise<VaultSnapshot>;
-  /** Checks the order would succeed, sends it, and waits for the result. `onSent` runs as soon as it is broadcast. */
-  swap(req: SwapRequest, onSent: (txHash: Hex) => Promise<void>): Promise<SwapOutcome>;
-  /** What became of a sent transaction; null while the chain does not know it. */
+  /**
+   * Checks the order would succeed, signs it, hands its hash to `onSigned`, and only then sends it and waits for
+   * the result. Because the hash is known and written down before anything reaches the network, an order can
+   * always be found again by its hash, whatever happens next. If `onSigned` throws, nothing is sent.
+   */
+  swap(req: SwapRequest, onSigned: (txHash: Hex) => Promise<void>): Promise<SwapOutcome>;
+  /** What became of a signed transaction; null while the chain does not know it. */
   outcomeOf(txHash: Hex, vault: Address): Promise<SwapOutcome | null>;
-  /** After a crash: the vault's swap of exactly this input since `fromBlock`, if there was one. */
-  findSwap(req: SwapRequest, fromBlock: bigint): Promise<SwapOutcome | null>;
 }
 
 const lower = (a: string) => a.toLowerCase() as Address;
@@ -95,11 +99,13 @@ export function refusalReason(err: unknown): string {
   return "the chain could not be reached";
 }
 
-/** True when a failed send certainly left nothing on the chain. Anything unclear is treated as possibly sent. */
-function neverSent(err: unknown): boolean {
+/**
+ * True when the network certainly refused a transaction outright, so it can never be mined. "Nonce too low" and
+ * "already known" are NOT here: they are what a node answers when the same transaction already got through.
+ */
+function refusedOutright(err: unknown): boolean {
   if (!(err instanceof BaseError)) return false;
-  if (err.walk((e) => e instanceof ContractFunctionRevertedError) instanceof ContractFunctionRevertedError) return true;
-  return /insufficient funds|nonce too low|intrinsic gas|gas limit|underpriced|fee cap|max fee per gas|execution reverted/i.test(`${err.shortMessage} ${err.details ?? ""}`);
+  return /insufficient funds|intrinsic gas|exceeds block gas limit|underpriced|fee cap|max fee per gas/i.test(`${err.shortMessage} ${err.details ?? ""}`);
 }
 
 export interface ViemChainOptions {
@@ -139,6 +145,17 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
     return { ok: true, txHash: receipt.transactionHash, amountIn: swapped.args.amountIn, amountOut: swapped.args.amountOut };
   };
 
+  const outcomeOfHash = async (txHash: Hex, vault: Address): Promise<SwapOutcome | null> => {
+    try {
+      return fromReceipt(await pub.getTransactionReceipt({ hash: txHash }), vault);
+    } catch (err) {
+      // "Not found" means the chain does not know the transaction (yet). Anything else is a failed question,
+      // not an answer, and must not be read as "it never happened".
+      if (err instanceof BaseError && err.name === "TransactionReceiptNotFoundError") return null;
+      throw err;
+    }
+  };
+
   return {
     operator: lower(account.address),
     blockNumber: () => pub.getBlockNumber(),
@@ -169,7 +186,7 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
       };
     },
 
-    swap: (req, onSent) =>
+    swap: (req, onSigned) =>
       inTurn(async () => {
         const call = {
           account,
@@ -180,21 +197,35 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
           // out from the Chainlink price and the owner's slippage limit and enforces it itself.
           args: [req.tokenIn, req.tokenOut, req.feeTier, req.amountIn, 0n],
         } as const;
-        let hash: Hex;
+        let serialized: Hex;
         try {
-          // A dry run first: an order the vault would refuse costs nothing and is never sent.
+          // A dry run first: an order the vault would refuse costs nothing and is never signed.
           await pub.simulateContract(call);
+          const estimate = await pub.estimateContractGas(call);
+          const prepared = await wallet.prepareTransactionRequest({
+            account,
+            to: req.vault,
+            data: encodeFunctionData(call),
+            // Room to spare: the pool can move between the estimate and the block the order lands in.
+            gas: (estimate * 13n) / 10n,
+          });
+          serialized = await wallet.signTransaction(prepared);
         } catch (err) {
           return { ok: false, reason: refusalReason(err) };
         }
+        const hash = keccak256(serialized);
+        // Written down before it is sent. If this throws, the order was withdrawn and nothing goes out.
+        await onSigned(hash);
         try {
-          hash = await wallet.writeContract(call);
+          await pub.sendRawTransaction({ serializedTransaction: serialized });
         } catch (err) {
-          if (neverSent(err)) return { ok: false, reason: refusalReason(err) };
-          // The connection failed while sending. The order may be out there: say so, and let the caller find out.
-          throw new OrderPendingError("The order may or may not have been sent");
+          // Sending the same signed transaction twice is harmless, so the transport may have retried it; a node
+          // that says "already known" has it. Ask the chain what it knows before concluding anything.
+          const known = await outcomeOfHash(hash, req.vault).catch(() => null);
+          if (known) return known;
+          if (refusedOutright(err)) return { ok: false, reason: refusalReason(err), txHash: hash };
+          throw new OrderPendingError(`Order ${hash} may or may not have reached the chain`);
         }
-        await onSent(hash);
         let receipt: TransactionReceipt;
         try {
           receipt = await pub.waitForTransactionReceipt({ hash, timeout: opts.confirmTimeoutMs ?? 120_000 });
@@ -204,26 +235,6 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
         return fromReceipt(receipt, req.vault);
       }),
 
-    async outcomeOf(txHash, vault) {
-      try {
-        return fromReceipt(await pub.getTransactionReceipt({ hash: txHash }), vault);
-      } catch {
-        return null;
-      }
-    },
-
-    async findSwap(req, fromBlock) {
-      const logs = await pub.getContractEvents({
-        address: req.vault,
-        abi: VAULT_ABI,
-        eventName: "Swapped",
-        args: { tokenIn: req.tokenIn, tokenOut: req.tokenOut },
-        fromBlock,
-        toBlock: "latest",
-      });
-      const hit = logs.find((l) => l.args.amountIn === req.amountIn);
-      if (!hit || hit.args.amountOut == null) return null;
-      return { ok: true, txHash: hit.transactionHash, amountIn: req.amountIn, amountOut: hit.args.amountOut };
-    },
+    outcomeOf: outcomeOfHash,
   };
 }

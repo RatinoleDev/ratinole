@@ -19,6 +19,7 @@ export const env: ApiEnv = {
   liveFactory: null,
   liveRpcUrl: "http://127.0.0.1:1",
   liveMaxVaultUsd: 500,
+  liveTradingPaused: false,
 };
 
 export const redis = new Redis(env.redisUrl);

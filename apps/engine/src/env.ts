@@ -22,4 +22,6 @@ export const env = {
   operatorKey: () => process.env.OPERATOR_PRIVATE_KEY?.trim() || null,
   liveFactory: () => process.env.LIVE_FACTORY_ADDRESS?.trim() || null,
   liveRpcUrl: () => process.env.LIVE_RPC_URL?.trim() || CHAIN.rpcUrl,
+  /** The owner paused live trading: live agents are left alone until it is lifted. Vaults are untouched. */
+  liveTradingPaused: () => /^(1|true|yes)$/i.test(process.env.LIVE_TRADING_PAUSED?.trim() ?? ""),
 };

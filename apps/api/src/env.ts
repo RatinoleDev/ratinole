@@ -24,6 +24,8 @@ export interface ApiEnv {
   liveRpcUrl: string;
   /** The most a vault may hold when a live agent is launched, in dollars; null for no cap. */
   liveMaxVaultUsd: number | null;
+  /** The owner paused live trading: vaults stay reachable, but no live agent starts, resumes or trades. */
+  liveTradingPaused: boolean;
 }
 
 export function readEnv(): ApiEnv {
@@ -41,5 +43,6 @@ export function readEnv(): ApiEnv {
     liveFactory: /^0x[0-9a-fA-F]{40}$/.test(process.env.LIVE_FACTORY_ADDRESS?.trim() ?? "") ? process.env.LIVE_FACTORY_ADDRESS!.trim() : null,
     liveRpcUrl: process.env.LIVE_RPC_URL?.trim() || CHAIN.rpcUrl,
     liveMaxVaultUsd: maxVaultUsd(process.env.LIVE_MAX_VAULT_USD),
+    liveTradingPaused: /^(1|true|yes)$/i.test(process.env.LIVE_TRADING_PAUSED?.trim() ?? ""),
   };
 }
