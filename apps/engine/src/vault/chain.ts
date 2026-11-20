@@ -84,7 +84,10 @@ export function refusalReason(err: unknown): string {
           return "there was nothing to trade";
       }
       // Uniswap's router refuses with this text when the pool cannot meet the minimum output.
-      if (/too little received|STF|SPL/i.test(revert.reason ?? revert.shortMessage)) return "the pool price was worse than the vault's slippage limit";
+      const text = revert.reason ?? revert.shortMessage;
+      if (/too little received|SPL/i.test(text)) return "the pool price was worse than the vault's slippage limit";
+      // "STF": the router could not take the tokens in, because the vault holds less than the order asked for.
+      if (/\bSTF\b/.test(text)) return "the vault holds less than the order needed";
     }
     if (/insufficient funds/i.test(err.shortMessage)) return "the agent's own wallet is out of gas money";
     return `the chain refused the order (${err.shortMessage.replace(/\.$/, "")})`;
