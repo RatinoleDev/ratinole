@@ -44,12 +44,18 @@ model Agent {
   /// Settings chosen by the backtest tuner (AgentParams).
   params       Json
   market       String
+  /// "paper" (virtual money) or "live" (real money in the owner's vault).
   mode         String      @default("paper")
+  /// Live agents only: the owner's vault on Robinhood Chain, lower-case 0x address.
+  vault        String?
   /// "active" | "paused" | "archived" (deleted by the owner; decisions are kept)
   status       String      @default("active")
   /// Run by the Ratinole team to show live decisions; labelled "House" everywhere.
   house        Boolean     @default(false)
   archivedAt   DateTime?
+  /// Paper: virtual cash at launch. Live: the vault's value at launch, then adjusted on every deposit and
+  /// withdrawal the way a fund issues and redeems units, so moving money in or out never counts as a gain or a
+  /// loss. Return is always equity / startingCash - 1.
   startingCash Float
   /// Wallet limits copied at launch so later changes do not rewrite history.
   maxSizePct      Float
@@ -65,6 +71,7 @@ model Agent {
   createdAt    DateTime    @default(now())
   state        AgentState?
   decisions    Decision[]
+  orders       LiveOrder[]
 
   @@index([userId])
   @@index([status])
@@ -103,7 +110,15 @@ model Decision {
   evidence           Json
   guard              Json
   explanation        String
+  /// Live agents only: the on-chain transaction of this hour's order.
   txHash             String?
+  /// Live agents only: why this hour's order did not go through. Null when it did, or when there was none.
+  execError          String?
+  /// Live agents only: dollars the owner moved into (+) or out of (-) the vault since the previous decision.
+  flowUsd            Float?
+  /// Live agents only: the agent's startingCash after this hour (it moves with deposits and withdrawals), so
+  /// a chart of past hours divides each equity by the base it had at the time.
+  basisAfter         Float?
   /// Made after the fact by catch-up rather than on time.
   late               Boolean  @default(false)
   fillSide           String?
@@ -124,6 +139,34 @@ model Decision {
 
   @@unique([agentId, hour])
   @@index([hour])
+}
+
+/// One on-chain order per live agent per hour. The row is written before the order is sent, so a crash or a
+/// retry can never send the same order twice.
+model LiveOrder {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  hour      DateTime
+  /// "buy" | "sell"
+  side      String
+  vault     String
+  tokenIn   String
+  tokenOut  String
+  /// Raw token units, as a decimal string.
+  amountIn  String
+  /// "pending" (recorded, maybe sent) | "done" | "failed"
+  status    String   @default("pending")
+  /// Chain height when the order was recorded; where to look for it after a crash.
+  fromBlock String
+  txHash    String?
+  amountOut String?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([agentId, hour])
+  @@index([status])
 }
 
 model Backtest {

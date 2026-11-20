@@ -18,7 +18,7 @@ import {
 } from "./evidence";
 import { explain, usd, type Situation } from "./explain";
 import { runGuard, vetoes } from "./guard";
-import { applyBuy, applySell, equityOf, rollDay, type Fill, type PositionState } from "./paper";
+import { applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, type Fill, type LiveFill, type PositionState } from "./paper";
 import { classifyRegime, type RegimeParams } from "./regime";
 import { SeriesSource, formatSignalValue, type SignalId } from "./signals";
 import { HOUR_MS, type Action, type Candle, type Decision, type EvidenceItem, type Filter, type GuardCheck, type Plan } from "./types";
@@ -57,6 +57,12 @@ export interface StepInput {
   fillPrice: number | null;
   /** Skip building the explanation text (backtests). Default true. */
   explain?: boolean;
+  /**
+   * Live trading. The first pass (no `liveFill`) says what the agent wants to do. If that was a trade, the engine
+   * places the order and runs this step again with the same inputs plus what really happened, so the stored
+   * decision, position and explanation carry the real amounts, or say that the order did not go through.
+   */
+  liveFill?: LiveFill;
 }
 
 export interface StepOutput {
@@ -202,7 +208,13 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
       situation = { type: "vetoed", side: "buy", confidence: buyConf, vetoes: v };
       return;
     }
-    const res = applyBuy(state, fillPrice!, plan.sizePctOfCash, ctx.costPct, hour);
+    const live = inp.liveFill;
+    if (live && !live.ok) {
+      situation = { type: "not_executed", side: "buy", confidence: buyConf, why: live.reason };
+      return;
+    }
+    if (live && live.side !== "buy") throw new Error("A sell was booked for a decision to buy");
+    const res = live ? settleBuy(state, live, hour) : applyBuy(state, fillPrice!, plan.sizePctOfCash, ctx.costPct, hour);
     if (!res) {
       situation = { type: "no_cash" };
       return;
@@ -243,8 +255,12 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
         situation = { type: "vetoed", side: "sell", confidence: sellConf, vetoes: v, reason };
       } else {
         const costBasis = (state.avgEntry ?? close) * state.qty;
-        const res = applySell(state, fillPrice!, ctx.costPct);
-        if (res) {
+        const live = inp.liveFill;
+        if (live && live.ok && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
+        const res = live ? (live.ok ? settleSell(state, live) : null) : applySell(state, fillPrice!, ctx.costPct);
+        if (live && !live.ok) {
+          situation = { type: "not_executed", side: "sell", confidence: sellConf, why: live.reason, reason };
+        } else if (res) {
           const realizedPct = ((res.fill.notional - res.fill.fee) / costBasis - 1) * 100;
           state = res.state;
           fill = res.fill;
@@ -280,10 +296,10 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
 /** Decide from raw candles. Uses only candles that closed at or before `hour`. */
 export function decide(
   ctx: DecideContext,
-  args: { candles: readonly Candle[]; hour: number; state: PositionState; fillPrice: number | null },
+  args: { candles: readonly Candle[]; hour: number; state: PositionState; fillPrice: number | null; liveFill?: LiveFill },
 ): StepOutput {
   const closed = args.candles.filter((c) => c.t + HOUR_MS <= args.hour);
   if (!closed.length) throw new Error("No candle closed before this hour");
   const src = new SeriesSource(closed);
-  return decideStep(ctx, { src, i: closed.length - 1, hour: args.hour, state: args.state, fillPrice: args.fillPrice });
+  return decideStep(ctx, { src, i: closed.length - 1, hour: args.hour, state: args.state, fillPrice: args.fillPrice, liveFill: args.liveFill });
 }

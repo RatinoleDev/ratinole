@@ -18,7 +18,9 @@ export type Situation =
   | { type: "not_due"; hoursLeft: number }
   | { type: "no_cash" }
   | { type: "holding"; pnlPct: number; exits: string[] }
-  | { type: "exited"; reason: string; fill: Fill; realizedPct: number };
+  | { type: "exited"; reason: string; fill: Fill; realizedPct: number }
+  /** Live trading only: the agent wanted to trade, but no order went through. Nothing changed. */
+  | { type: "not_executed"; side: "buy" | "sell"; confidence: number; why: string; reason?: string };
 
 export interface ExplainInput {
   action: Action;
@@ -98,6 +100,11 @@ export function explain(x: ExplainInput): string {
     case "exited":
       text = `Sell. ${s.reason} Sold ${qtyText(s.fill.qty)} ${x.market} at ${usd(s.fill.price)}, ${pct(s.realizedPct)} on the trade after costs.`;
       break;
+    case "not_executed": {
+      const what = s.side === "buy" ? `The entry rules are met (confidence ${s.confidence}%)` : (s.reason ?? "The exit rule is met");
+      text = `Hold. ${what.replace(/\.$/, "")}, but the ${s.side} order did not go through: ${lowerFirst(s.why.replace(/\.$/, ""))}. Nothing changed.`;
+      break;
+    }
   }
   if (x.notChecked.length) text += ` Not checked: ${joinAnd(x.notChecked)}.`;
   return text;

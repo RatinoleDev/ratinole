@@ -254,3 +254,75 @@ describe("decide: funding", () => {
     expect(out.decision.evidence[0]!.value).toMatch(/not enough history/);
   });
 });
+
+describe("decide: live fills", () => {
+  it("books a real buy: the amounts and the explanation are what happened on-chain", () => {
+    const candles = series(falling(12));
+    const { hour, fillPrice } = at(candles);
+    const state = initialState(10_000, hour);
+    const want = decide(ctx(), { candles, hour, state, fillPrice });
+    expect(want.fill).toMatchObject({ side: "buy", notional: 2500 });
+    // The pool gave slightly fewer tokens than the reference price implies.
+    const got = { ok: true as const, side: "buy" as const, notional: 2500, qty: 1.3, fee: 1.25 };
+    const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: got });
+    expect(out.decision.action).toBe("buy");
+    expect(out.decision.evidence).toEqual(want.decision.evidence);
+    expect(out.fill).toMatchObject({ side: "buy", qty: 1.3, notional: 2500, fee: 1.25 });
+    expect(out.fill!.price).toBeCloseTo((2500 - 1.25) / 1.3, 8);
+    expect(out.state).toMatchObject({ cash: 7500, qty: 1.3, lastBuyAt: hour });
+    expect(out.state.avgEntry).toBeCloseTo(2500 / 1.3, 8);
+    expect(out.decision.explanation).toMatch(/Bought \$2,500\.00 of ETH at \$1,922\.12/);
+  });
+
+  it("a buy order that did not go through is a hold that says why, and changes nothing", () => {
+    const candles = series(falling(12));
+    const { hour, fillPrice } = at(candles);
+    const state = initialState(10_000, hour);
+    const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: { ok: false, reason: "The vault's daily trading limit is used up." } });
+    expect(out.decision.action).toBe("hold");
+    expect(out.fill).toBeNull();
+    expect(out.state).toEqual(state);
+    expect(out.decision.explanation).toMatch(/^Hold\. The entry rules are met \(confidence \d+%\), but the buy order did not go through: the vault's daily trading limit is used up\. Nothing changed\.$/);
+  });
+
+  it("books a real sell: cash received is the value minus the pool fee", () => {
+    const candles = series(falling(3, 0.001));
+    const { hour, fillPrice, close } = at(candles);
+    const state = inPosition(hour, close * 1.06);
+    const got = { ok: true as const, side: "sell" as const, qty: 1, notional: close * 0.999, fee: close * 0.0005 };
+    const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: got });
+    expect(out.decision.action).toBe("sell");
+    expect(out.fill).toMatchObject({ side: "sell", qty: 1 });
+    expect(out.state.qty).toBe(0);
+    expect(out.state.avgEntry).toBeNull();
+    expect(out.state.cash).toBeCloseTo(state.cash + close * 0.999 - close * 0.0005, 6);
+    expect(out.decision.explanation).toMatch(/^Sell\. Stop loss reached/);
+  });
+
+  it("a sell order that did not go through keeps the position and says why", () => {
+    const candles = series(falling(3, 0.001));
+    const { hour, fillPrice, close } = at(candles);
+    const state = inPosition(hour, close * 1.06);
+    const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: { ok: false, reason: "the pool price was worse than the vault's slippage limit" } });
+    expect(out.decision.action).toBe("hold");
+    expect(out.fill).toBeNull();
+    expect(out.state.qty).toBe(1);
+    expect(out.decision.explanation).toMatch(/^Hold\. Stop loss reached: .* stop at −4%, but the sell order did not go through: the pool price was worse than the vault's slippage limit\. Nothing changed\.$/);
+  });
+
+  it("refuses a fill for the wrong side", () => {
+    const candles = series(falling(12));
+    const { hour, fillPrice } = at(candles);
+    const bad = { ok: true as const, side: "sell" as const, qty: 1, notional: 100, fee: 0 };
+    expect(() => decide(ctx(), { candles, hour, state: initialState(10_000, hour), fillPrice, liveFill: bad })).toThrow(/sell was booked/);
+  });
+
+  it("a live fill is ignored when the agent did not want to trade", () => {
+    const candles = series(rising(12));
+    const { hour, fillPrice } = at(candles);
+    const state = initialState(10_000, hour);
+    const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: { ok: false, reason: "x" } });
+    expect(out.decision.action).toBe("hold");
+    expect(out.decision.explanation).not.toMatch(/did not go through/);
+  });
+});

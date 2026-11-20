@@ -72,3 +72,51 @@ export function applySell(s: PositionState, price: number, costPct: number): { s
     fill: { side: "sell", price, qty: s.qty, notional: gross, fee },
   };
 }
+
+/**
+ * Live trading: what really happened to an order, read from the chain after the swap, or why there was none.
+ * Amounts are in whole units (dollars, tokens), already converted from the token's decimals.
+ *  - buy: `notional` dollars left the vault and `qty` tokens arrived; `fee` is the pool fee inside the notional.
+ *  - sell: `qty` tokens left the vault; `notional` is their value before the pool fee and `notional - fee`
+ *    dollars arrived.
+ */
+export type LiveFill =
+  | { ok: true; side: "buy" | "sell"; qty: number; notional: number; fee: number }
+  | { ok: false; reason: string };
+
+type DoneFill = Extract<LiveFill, { ok: true }>;
+
+/** Book a real buy. The price is what was paid per token after the pool fee, so it includes price impact. */
+export function settleBuy(s: PositionState, f: DoneFill, hour: number): { state: PositionState; fill: Fill } | null {
+  if (!(f.qty > 0) || !(f.notional > 0)) return null;
+  const price = (f.notional - f.fee) / f.qty;
+  const newQty = s.qty + f.qty;
+  return {
+    state: {
+      ...s,
+      cash: Math.max(0, s.cash - f.notional),
+      qty: newQty,
+      avgEntry: ((s.avgEntry ?? 0) * s.qty + f.notional) / newQty,
+      peak: Math.max(s.peak ?? price, price),
+      lastBuyAt: hour,
+    },
+    fill: { side: "buy", price, qty: f.qty, notional: f.notional, fee: f.fee },
+  };
+}
+
+/** Book a real sell. Anything smaller than a millionth of a token left over counts as flat. */
+export function settleSell(s: PositionState, f: DoneFill): { state: PositionState; fill: Fill } | null {
+  if (!(f.qty > 0) || !(f.notional > 0)) return null;
+  const left = s.qty - f.qty;
+  const flat = left < 1e-6;
+  return {
+    state: {
+      ...s,
+      cash: s.cash + f.notional - f.fee,
+      qty: flat ? 0 : left,
+      avgEntry: flat ? null : s.avgEntry,
+      peak: flat ? null : s.peak,
+    },
+    fill: { side: "sell", price: f.notional / f.qty, qty: f.qty, notional: f.notional, fee: f.fee },
+  };
+}
