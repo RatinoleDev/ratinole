@@ -5,6 +5,7 @@
   "publicRpc": "https://robinhood.drpc.org",
   "router": "0xcaf681a66d020601342297493863e78c959e5cb2",
   "stable": "USDG",
+  "vaultTokens": ["USDG", "WETH", "cbBTC"],
   "tokens": [
     {
       "symbol": "USDG",

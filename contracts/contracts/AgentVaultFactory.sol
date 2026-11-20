@@ -7,6 +7,8 @@ import {AgentVault, IVaultOwnerHook} from "./AgentVault.sol";
 /// @notice Forked from NOUNY's AgentVaultFactory (MIT). Ratinole changes: the admin is set at deployment (a
 ///         TimelockController run by a Safe, HANDOFF section 6.2), and `vaultOf` follows a vault when its
 ///         ownership moves (section 6.1).
+/// @notice `vaultOf` is a list for the website, not a record of ownership: who owns a vault is only ever what
+///         the vault itself says. Nothing in this factory can stop a vault's owner from using their vault.
 /// @notice Each wallet creates one AgentVault of its own. The factory holds the default token list
 ///         (tokens, Chainlink feeds, staleness limits and pinned pool fee tiers) and the NOUNY operator
 ///         installed into NEW vaults.
@@ -30,6 +32,7 @@ contract AgentVaultFactory is IVaultOwnerHook {
 
     event VaultCreated(address indexed owner, address vault);
     event VaultOwnerChanged(address indexed vault, address indexed previousOwner, address indexed newOwner);
+    event VaultListed(address indexed owner, address indexed vault);
     event DefaultOperatorChanged(address indexed previous, address indexed current);
     event AdminTransferStarted(address indexed pendingAdmin);
     event AdminTransferred(address indexed admin);
@@ -37,6 +40,7 @@ contract AgentVaultFactory is IVaultOwnerHook {
     error NotAdmin();
     error VaultExists(address vault);
     error NotVault();
+    error NotVaultOwner();
     error ZeroAddress();
 
     modifier onlyAdmin() {
@@ -71,7 +75,9 @@ contract AgentVaultFactory is IVaultOwnerHook {
 
     /// @notice Create a vault for the caller. Limits: max slippage (bps) & swap value per 24h (USD, 18 decimals).
     function createVault(uint16 maxSlippageBps, uint256 dailyLimitUsd) external returns (address vault) {
-        if (vaultOf[msg.sender] != address(0)) revert VaultExists(vaultOf[msg.sender]);
+        // One vault per wallet. A listing left behind by a vault that now belongs to someone else does not count.
+        address listed = vaultOf[msg.sender];
+        if (listed != address(0) && AgentVault(listed).owner() == msg.sender) revert VaultExists(listed);
         vault = address(
             new AgentVault(
                 msg.sender, defaultOperator, router, maxSlippageBps, dailyLimitUsd, _tokens, _feeds, _staleness, _feeTiers
@@ -82,14 +88,23 @@ contract AgentVaultFactory is IVaultOwnerHook {
         emit VaultCreated(msg.sender, vault);
     }
 
-    /// @notice Called by a vault when its ownership moves. A wallet still owns at most one vault, so a transfer
-    ///         or recovery to a wallet that already has one reverts.
+    /// @notice Called by a vault when its ownership moves. It never refuses: a wallet that already has a vault
+    ///         of its own listed keeps that listing, and can list the vault it received with `listVault`.
     function onOwnerChanged(address previousOwner, address newOwner) external {
         if (!isVault[msg.sender]) revert NotVault();
-        if (vaultOf[newOwner] != address(0)) revert VaultExists(vaultOf[newOwner]);
         if (vaultOf[previousOwner] == msg.sender) delete vaultOf[previousOwner];
-        vaultOf[newOwner] = msg.sender;
+        address listed = vaultOf[newOwner];
+        if (listed == address(0) || AgentVault(listed).owner() != newOwner) vaultOf[newOwner] = msg.sender;
         emit VaultOwnerChanged(msg.sender, previousOwner, newOwner);
+    }
+
+    /// @notice List one of the caller's own vaults under their wallet. For a wallet that came to own a second
+    ///         vault (by transfer or recovery) and wants the website to show that one.
+    function listVault(address vault) external {
+        if (!isVault[vault]) revert NotVault();
+        if (AgentVault(vault).owner() != msg.sender) revert NotVaultOwner();
+        vaultOf[msg.sender] = vault;
+        emit VaultListed(msg.sender, vault);
     }
 
     /// @notice Rotate the operator used for vaults created from now on. Existing vaults are not affected.

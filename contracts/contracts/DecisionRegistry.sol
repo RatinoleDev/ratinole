@@ -14,7 +14,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 ///         Pairs are hashed sorted, as `MerkleProof` expects.
 ///
 ///         A posted root can never be changed or removed. The poster (the engine's key) can only add roots for
-///         hours that have passed; the admin (a TimelockController run by a Safe) can only rotate the poster.
+///         hours that are over; the admin (a TimelockController run by a Safe) can only rotate the poster.
 contract DecisionRegistry {
     struct Entry {
         bytes32 root;
@@ -48,10 +48,12 @@ contract DecisionRegistry {
         emit PosterChanged(address(0), poster_);
     }
 
-    /// @notice Record the root for `hour`. Hours must be on the hour and not in the future; each only once.
+    /// @notice Record the root for `hour`. Hours must be on the hour and over; each only once. An hour still in
+    ///         progress is refused: its root could never be changed, so it must not be posted before the
+    ///         decisions of that hour all exist.
     function post(uint64 hour, bytes32 root, uint32 count) external {
         if (msg.sender != poster) revert NotPoster();
-        if (hour % 1 hours != 0 || hour > block.timestamp) revert BadHour(hour);
+        if (hour % 1 hours != 0 || hour + 1 hours > block.timestamp) revert BadHour(hour);
         if (root == bytes32(0) || count == 0) revert EmptyRoot();
         if (entries[hour].postedAt != 0) revert AlreadyPosted(hour);
         entries[hour] = Entry({root: root, count: count, postedAt: uint64(block.timestamp)});

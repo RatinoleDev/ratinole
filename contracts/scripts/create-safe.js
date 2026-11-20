@@ -1,7 +1,7 @@
 // Creates the Safe that will own every admin power of the contracts (through the timelock). The Safe's own
 // contracts (v1.4.1) are already on Robinhood Chain; this only creates your instance of it.
 //
-//   SAFE_OWNERS=0xYourWallet[,0xSecondSigner,...] [SAFE_THRESHOLD=2] DEPLOYER_PRIVATE_KEY=... \
+//   SAFE_OWNERS=0xYourWallet[,0xSecondSigner,...] SAFE_THRESHOLD=2 DEPLOYER_PRIVATE_KEY=... \
 //     pnpm --filter @rationale/contracts exec hardhat run scripts/create-safe.js --network robinhood
 //
 // The owners are the wallets that must approve admin changes; the threshold is how many of them are needed.
@@ -19,7 +19,10 @@ async function main() {
   const owners = (process.env.SAFE_OWNERS || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (!owners.length || !owners.every((o) => ethers.isAddress(o))) throw new Error('Set SAFE_OWNERS to one or more wallet addresses, separated by commas');
   if (new Set(owners.map((o) => o.toLowerCase())).size !== owners.length) throw new Error('SAFE_OWNERS lists the same wallet twice');
-  const threshold = Number(process.env.SAFE_THRESHOLD || (owners.length > 1 ? 2 : 1));
+  // With more than one owner the number of approvals is a decision, so it is never guessed.
+  if (owners.length > 1 && !process.env.SAFE_THRESHOLD) throw new Error(`Set SAFE_THRESHOLD: how many of the ${owners.length} owners must approve`);
+  if (owners.some((o) => o === ethers.ZeroAddress)) throw new Error('SAFE_OWNERS contains the zero address');
+  const threshold = Number(process.env.SAFE_THRESHOLD || 1);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > owners.length) throw new Error('SAFE_THRESHOLD must be between 1 and the number of owners');
   if (Number((await ethers.provider.getNetwork()).chainId) !== 4663) throw new Error('This is not Robinhood Chain (4663)');
   for (const [name, addr] of Object.entries(SAFE)) {
@@ -44,6 +47,8 @@ async function main() {
   const created = receipt.logs.map((l) => { try { return factory.interface.parseLog(l); } catch { return null; } }).find((e) => e && e.name === 'ProxyCreation');
   if (!created) throw new Error('The Safe was not created (no ProxyCreation event)');
   const address = created.args.proxy;
+  // Shown before the read-back: if the connection drops now, the address is not lost.
+  console.log(`Created at ${address}. Checking it...`);
 
   // Read it back: the owners and threshold must be exactly what was asked for.
   const safe = await ethers.getContractAt(safeAbi, address);

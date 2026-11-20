@@ -19,15 +19,20 @@ steps are in [go-live.md](go-live.md).
 | Part | State |
 |---|---|
 | `contracts/`: AgentVault, factory, PayrollVault, payroll factory (from NOUNY) | Done, original tests kept green |
-| Two-step vault ownership transfer and a recovery wallet with a 2 to 90 day delay | Done, tested |
-| Factory admin set at deployment (the timelock); `vaultOf` follows ownership | Done, tested |
-| DecisionRegistry: one Merkle root per past hour, never overwritable, verifiable by anyone | Done, tested |
+| Two-step vault ownership transfer (the offer lapses after 7 days) and a recovery wallet with a 2 to 90 day delay (any owner action ends a claim; a ready claim lapses after 30 days) | Done, tested |
+| A new owner starts with the agent's access off; the agent's key can never be the recovery wallet | Done, tested |
+| Factory admin set at deployment (the timelock); `vaultOf` follows ownership and can never block an ownership change | Done, tested |
+| New vaults trade USDG, WETH and cbBTC only, fixed at deployment | Done, checked after deploying |
+| DecisionRegistry: one Merkle root per finished hour, never overwritable, verifiable by anyone | Done, tested |
 | RatinoleTimelock (OpenZeppelin TimelockController) run by the Safe | Done, tested |
 | Deploy script with post-deploy checks and a mainnet guard | Done, dry-run on a fork |
 | Rehearsal of the Phase 3 done bar on a Robinhood Chain fork | Passes: $10 vault, one sell and one buy through real pools, both decisions verified in the registry, a timelocked admin change, full withdrawal |
 
-Test counts: 67 unit tests, a 2,000-step fuzz test, and 11 fork tests (real
+Test counts: 75 unit tests, a 2,000-step fuzz test, and 11 fork tests (real
 Uniswap pools and Chainlink feeds on a local copy of the chain, fake money).
+
+An internal review of the whole real-money path (contracts, engine, API, website, owner's
+scripts) was done on 20 Nov 2026 and its findings fixed. It is not an independent audit.
 
 ## Live trading: built and rehearsed
 
@@ -36,8 +41,8 @@ Uniswap pools and Chainlink feeds on a local copy of the chain, fake money).
 | Engine live executor | Done. One crash-safe order per live agent per hour, placed with the operator key through `AgentVault.swap`; the position is read from the vault; deposits and withdrawals are flows, never gains; the stored decision carries the real amounts and the transaction |
 | API | Done. Live launch and resume are checked against the vault on-chain; paper and live are never added together |
 | Vault screens | Done. Create, deposit, withdraw, limits, pause, agent access, all signed in the user's wallet |
-| Owner's scripts | Done. `scripts/keys.mjs` (create and show the keys), `scripts/go-live.mjs` (status, Safe, deploy, open, close) |
-| Rehearsal on a fork | Done, through the real website and the real engine process: sign in, create a vault, deposit, launch a live agent, the engine's hourly run buys through the real WETH/USDG pool, the decision links to its transaction, then pause and withdraw. Also the owner's steps: keys, a 2-of-2 Safe, deploy signed by the key from `.env`, open, close |
+| Owner's scripts | Done. `scripts/keys.mjs` (create, show and remove the keys), `scripts/go-live.mjs` (status, Safe, deploy, open, close) |
+| Rehearsal on a fork | Done, through the real website and the real engine process: sign in, create a vault, deposit, launch a live agent, the engine's hourly run buys through the real WETH/USDG pool, the decision links to its transaction, then pause and withdraw. Also the owner's steps with test accounts: a 2-of-2 Safe, deploy, the checks before opening |
 
 ## What is left
 
@@ -71,9 +76,12 @@ before opening the site to everyone.
 
 The key can only swap a vault's tokens against USDG through the pinned pools. It can
 never withdraw or send funds anywhere. Each swap must return at least the Chainlink
-value minus the vault's slippage limit, and the vault caps the value traded per day.
-Rough bound: `dailyLimitUsd × (maxSlippageBps + pool fee + oracle lag)` per day,
-until the owner pauses the vault or revokes the operator (from NOUNY's SECURITY.md).
+value minus the vault's slippage limit, and the vault caps the value traded per
+24-hour window. Rough bound: `dailyLimitUsd × (maxSlippageBps + pool fee + oracle lag)`
+per window, until the owner pauses the vault or revokes the operator (from NOUNY's
+SECURITY.md). The windows are fixed, not rolling: around the end of one, up to twice
+the limit can trade within a short time, so the bound for a single day is twice that
+figure. The default daily limit for a new vault is $200.
 
 ## Open decisions
 

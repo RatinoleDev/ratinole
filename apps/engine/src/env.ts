@@ -20,6 +20,11 @@ export const env = {
    * and is never logged.
    */
   operatorKey: () => process.env.OPERATOR_PRIVATE_KEY?.trim() || null,
+  /** Once the key is in the signer's memory it is taken out of the environment, where tools and crash reports look. */
+  forgetKeys: () => {
+    delete process.env.OPERATOR_PRIVATE_KEY;
+    delete process.env.DEPLOYER_PRIVATE_KEY;
+  },
   liveFactory: () => process.env.LIVE_FACTORY_ADDRESS?.trim() || null,
   liveRpcUrl: () => process.env.LIVE_RPC_URL?.trim() || CHAIN.rpcUrl,
   /** The owner paused live trading: live agents are left alone until it is lifted. Vaults are untouched. */

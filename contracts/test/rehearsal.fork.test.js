@@ -49,9 +49,10 @@ describe('Phase 3 rehearsal on a Robinhood Chain fork', function () {
     const buy = await (await vault.connect(operator).swap(T.USDG.address, T.WETH.address, T.WETH.feeTier, got, 0)).wait();
     console.log(`      bought back ${ethers.formatEther(await weth.balanceOf(await vault.getAddress()))} WETH`);
 
-    // Record both decisions for this hour and verify them, as the engine and the site will.
+    // Record both decisions and verify them, as the engine and the site will. The registry only takes an hour
+    // that is over, so this posts for the hour before the current one.
     const now = await time.latest();
-    const hour = BigInt(now - (now % 3600));
+    const hour = BigInt(now - (now % 3600) - 3600);
     const agent = ethers.id('agent-rehearsal');
     const leaves = [
       leaf(ethers.id('decision-sell'), agent, hour, ethers.keccak256(ethers.toUtf8Bytes(sell.hash))),

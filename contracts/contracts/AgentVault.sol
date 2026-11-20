@@ -37,7 +37,7 @@ interface IVaultOwnerHook {
 
 /// @title AgentVault
 /// @notice Forked from NOUNY's AgentVault (MIT). Ratinole adds a two-step ownership transfer and an optional
-///         recovery wallet with a time delay (HANDOFF section 6.1); everything else is unchanged.
+///         recovery wallet with a time delay (HANDOFF section 6.1); the swap path is unchanged.
 /// @notice Non-custodial vault owned by a single user. The NOUNY agent (operator) may only swap
 ///         between tokens the owner allows, and swap output always returns to this vault.
 ///
@@ -45,10 +45,13 @@ interface IVaultOwnerHook {
 ///  - The operator can NEVER withdraw or send tokens out of the vault.
 ///  - The minimum output of every swap is computed on-chain from Chainlink oracles (not by the operator),
 ///    so the operator cannot sell cheap / get sandwiched beyond `maxSlippageBps`.
-///  - Total swap value is capped per 24 hours (`dailyLimitUsd`).
+///  - Total swap value is capped per 24-hour window (`dailyLimitUsd`). Windows are fixed, not rolling: around
+///    the moment a window ends, up to twice the limit can trade within a short time.
 ///  - The owner can pause, replace/revoke the operator, and withdraw at any time, even while paused.
-///  - Ownership moves only when the new owner accepts it, or when the owner's chosen recovery wallet claims it
-///    after a delay the owner set; the owner can cancel a recovery during that delay.
+///  - Ownership moves only when the new owner accepts it within 7 days, or when the owner's chosen recovery
+///    wallet claims it after a delay the owner set. Anything the owner does with the vault ends a recovery
+///    claim in progress, and a claim that is ready but not completed within 30 days lapses.
+///  - A new owner starts with the agent's access switched off, and switches it on again themselves.
 contract AgentVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -64,6 +67,10 @@ contract AgentVault is ReentrancyGuard {
     uint256 public constant WINDOW = 1 days;
     uint32 public constant MIN_RECOVERY_DELAY = 2 days;
     uint32 public constant MAX_RECOVERY_DELAY = 90 days;
+    /// @notice How long a recovery wallet has to complete its claim once the delay has passed.
+    uint32 public constant RECOVERY_CLAIM_WINDOW = 30 days;
+    /// @notice How long a named new owner has to accept the vault.
+    uint32 public constant TRANSFER_ACCEPT_WINDOW = 7 days;
 
     ISwapRouter02 public immutable router;
     /// @notice The factory that created this vault (told about owner changes), or the deployer.
@@ -71,6 +78,7 @@ contract AgentVault is ReentrancyGuard {
 
     address public owner;
     address public pendingOwner;
+    uint64 public pendingOwnerExpiresAt; // 0 = no transfer in progress
     address public recovery; // optional; may claim ownership after `recoveryDelay`
     uint32 public recoveryDelay;
     uint64 public recoveryReadyAt; // 0 = no recovery in progress
@@ -125,9 +133,17 @@ contract AgentVault is ReentrancyGuard {
     error BadRecoveryDelay();
     error RecoveryNotReady(uint64 readyAt);
     error BadRecoveryWallet();
+    error BadOperator();
+    error TransferExpired(uint64 expiredAt);
+    error RecoveryExpired(uint64 expiredAt);
 
+    /// @dev The owner acting proves the owner's key is not lost, so a recovery claim in progress ends.
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
+        if (recoveryReadyAt != 0) {
+            recoveryReadyAt = 0;
+            emit RecoveryCancelled();
+        }
         _;
     }
 
@@ -178,8 +194,10 @@ contract AgentVault is ReentrancyGuard {
         emit TokenRemoved(token);
     }
 
-    /// @notice Change the operator. `address(0)` = fully revoke agent access.
+    /// @notice Change the operator. `address(0)` = fully revoke agent access. The recovery wallet cannot also be
+    ///         the operator: the operator's key sits on a server, and must never be able to claim the vault.
     function setOperator(address newOperator) external onlyOwner {
+        if (newOperator != address(0) && newOperator == recovery) revert BadOperator();
         emit OperatorChanged(operator, newOperator);
         operator = newOperator;
     }
@@ -202,14 +220,18 @@ contract AgentVault is ReentrancyGuard {
 
     // ---------------------------------------------------------------- ownership and recovery
 
-    /// @notice Start handing the vault to `next`, who must call `acceptOwnership`. `address(0)` cancels.
+    /// @notice Start handing the vault to `next`, who must call `acceptOwnership` within 7 days.
+    ///         `address(0)` cancels.
     function transferOwnership(address next) external onlyOwner {
         pendingOwner = next;
+        pendingOwnerExpiresAt = next == address(0) ? 0 : uint64(block.timestamp) + TRANSFER_ACCEPT_WINDOW;
         emit OwnershipTransferStarted(owner, next);
     }
 
     function acceptOwnership() external {
         if (msg.sender != pendingOwner || msg.sender == address(0)) revert NotPendingOwner();
+        uint64 expiresAt = pendingOwnerExpiresAt;
+        if (block.timestamp > expiresAt) revert TransferExpired(expiresAt);
         _setOwner(msg.sender);
     }
 
@@ -217,7 +239,7 @@ contract AgentVault is ReentrancyGuard {
     ///         `address(0)` turns recovery off. Any recovery in progress is cancelled.
     function setRecovery(address wallet, uint32 delay) external onlyOwner {
         if (wallet != address(0) && (delay < MIN_RECOVERY_DELAY || delay > MAX_RECOVERY_DELAY)) revert BadRecoveryDelay();
-        if (wallet == owner) revert BadRecoveryWallet();
+        if (wallet != address(0) && (wallet == owner || wallet == operator)) revert BadRecoveryWallet();
         recovery = wallet;
         recoveryDelay = wallet == address(0) ? 0 : delay;
         recoveryReadyAt = 0;
@@ -231,16 +253,17 @@ contract AgentVault is ReentrancyGuard {
         emit RecoveryStarted(msg.sender, recoveryReadyAt);
     }
 
-    /// @notice The owner stops a recovery claim during the delay.
-    function cancelRecovery() external onlyOwner {
-        recoveryReadyAt = 0;
-        emit RecoveryCancelled();
-    }
+    /// @notice The owner stops a recovery claim. Every owner call does this (see `onlyOwner`); this one does
+    ///         nothing else.
+    function cancelRecovery() external onlyOwner {}
 
+    /// @notice The recovery wallet takes the vault, from the end of the delay until 30 days after it. A claim
+    ///         left longer than that lapses and must be started again, which gives the owner the delay again.
     function completeRecovery() external {
         if (msg.sender != recovery || recovery == address(0)) revert NotRecovery();
         uint64 readyAt = recoveryReadyAt;
         if (readyAt == 0 || block.timestamp < readyAt) revert RecoveryNotReady(readyAt);
+        if (block.timestamp > readyAt + RECOVERY_CLAIM_WINDOW) revert RecoveryExpired(readyAt + RECOVERY_CLAIM_WINDOW);
         _setOwner(msg.sender);
     }
 
@@ -325,16 +348,26 @@ contract AgentVault is ReentrancyGuard {
 
     // ---------------------------------------------------------------- internal
 
-    /// @dev A new owner starts clean: no pending transfer and no recovery wallet from the previous owner.
+    /// @dev A new owner starts clean: no pending transfer, no recovery wallet and no operator from the previous
+    ///      owner. The new owner switches the agent's access on again with `setOperator`.
     function _setOwner(address next) internal {
         address previous = owner;
         owner = next;
         pendingOwner = address(0);
+        pendingOwnerExpiresAt = 0;
         recovery = address(0);
         recoveryDelay = 0;
         recoveryReadyAt = 0;
+        if (operator != address(0)) {
+            emit OperatorChanged(operator, address(0));
+            operator = address(0);
+        }
         emit OwnershipTransferred(previous, next);
-        if (factory.code.length > 0) IVaultOwnerHook(factory).onOwnerChanged(previous, next);
+        // The factory's list of vaults is a convenience for the website. Whatever happens there, the ownership
+        // change stands: money must never be stuck behind a list.
+        if (factory.code.length > 0) {
+            try IVaultOwnerHook(factory).onOwnerChanged(previous, next) {} catch {}
+        }
     }
 
     function _setToken(address token, address feed, uint32 maxStaleness, uint24 feeTier) internal {

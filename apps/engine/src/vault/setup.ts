@@ -8,6 +8,8 @@ import { viemVaultChain, type VaultChain } from "./chain";
 export function liveChainFromEnv(): VaultChain | null {
   const key = env.operatorKey();
   const factory = env.liveFactory();
+  // Read once, at start. From here on the key exists only in this function and in the signer it builds.
+  env.forgetKeys();
   if (!key && !factory) return null;
   if (env.liveTradingPaused()) {
     log("warn", "live trading is paused (LIVE_TRADING_PAUSED): live agents are left alone");

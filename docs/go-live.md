@@ -26,8 +26,12 @@ agent is a paper agent.
 - **Legal.** Running a service where software trades other people's money is regulated in many countries. Get
   advice for the places your users live before you promote it. The terms and risk pages are still drafts.
 - **The operator key lives on this server.** Anyone who gets into the server can use it. It cannot withdraw, but
-  it can make bad trades in every vault, each up to that vault's daily limit and slippage limit. Keep the
-  server locked down (docs/deploy.md), and move the key to a KMS before real volume.
+  it can make bad trades in every vault, each up to that vault's daily limit and slippage limit. The daily
+  limit is counted in fixed 24-hour windows, so around the end of a window up to twice the limit can trade
+  within a short time. Keep the server locked down (docs/deploy.md), and move the key to a KMS before real
+  volume. Only the engine reads the key: the API and the website drop it from their own process at start.
+- **New vaults can trade USDG, WETH and cbBTC, and nothing else.** That list is fixed when the factory is
+  deployed and can never be changed. Trading other tokens later means deploying a new factory.
 
 ## Steps
 
@@ -62,7 +66,8 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
 
 4. **Send ETH on Robinhood Chain** to both addresses printed above. Fees there are very low (about 0.02 gwei
    when this was written): creating the Safe and deploying takes about 5.8 million gas, a few cents; one trade
-   takes about 0.3 million gas. Sending 0.002 ETH to each is plenty to start. Check what arrived:
+   takes about 0.3 million gas. Sending 0.002 ETH to each is plenty to start. The site will not open while the
+   agent's address holds less than 0.001 ETH. Check what arrived:
 
    ```bash
    node scripts/go-live.mjs status
@@ -74,8 +79,9 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
    node scripts/go-live.mjs safe 0xYourWallet,0xSecondSigner 2
    ```
 
-   The last number is how many of them must approve. One wallet alone works (`safe 0xYourWallet`), but it is
-   not a multisig; add a second signer as soon as you can. Keep the `SAFE_ADDRESS` it prints.
+   The last number is how many of them must approve; with more than one wallet you must give it. One wallet
+   alone works (`safe 0xYourWallet`), but it is not a multisig: whoever holds that wallet controls the admin.
+   Add a second signer as soon as you can. Keep the `SAFE_ADDRESS` it prints.
 
 6. **Deploy the contracts**:
 
@@ -83,10 +89,18 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
    node scripts/go-live.mjs deploy 0xYourSafeAddress
    ```
 
-   It shows what it will do and asks you to type `DEPLOY`. It deploys the timelock (3-day delay, driven only by
-   your Safe), the vault factory and the decision registry, then reads everything back and stops if any power
-   is not where it should be. The addresses are saved in `contracts/deployments/robinhood.json`; commit that
-   file. The deployer key has no power afterwards.
+   It first checks that the address is a Safe on Robinhood Chain and shows its owners: **check that they are
+   wallets you control** before you type `DEPLOY`. A Safe created on another network does not exist here.
+   It then deploys the timelock (3-day delay, driven only by your Safe), the vault factory and the decision
+   registry. The three addresses are printed and saved in `contracts/deployments/robinhood.json` as soon as
+   the contracts exist; then everything is read back, and the record is marked `"verified": true` only if
+   every power is where it should be. If it stops before that, do not open the site. Commit the record file.
+
+   The deployer key has no power afterwards. Move any ETH left on it, then take it off the server:
+
+   ```bash
+   node scripts/keys.mjs remove deployer
+   ```
 
 7. **Test with your own money first.** Open live trading only for yourself by doing step 8 at a quiet time,
    then: connect your wallet, create your vault on the Vault page, deposit $10 of USDG, launch a live agent
@@ -101,7 +115,10 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
    pm2 reload ecosystem.config.cjs --update-env
    ```
 
-   It asks you to type `OPEN`. From then on any visitor can create a vault and trade real money.
+   Before it asks, it checks on-chain that the factory hands new vaults this server's agent key, that the
+   factory's admin is the timelock, that its tokens are the ones the site trades, that the agent can pay fees,
+   and that a vault can be created. Then it asks you to type `OPEN`. From then on any visitor can create a
+   vault and trade real money.
 
 To pause it (no live agent starts or trades; everyone can still see their vault on the site and withdraw):
 
@@ -124,16 +141,24 @@ pm2 reload ecosystem.config.cjs --update-env
   retried later in the hour.
 - **Missed hours are never traded late.** An order is only placed in the first 20 minutes of its hour.
 - **An agent stops itself**, with the reason shown to its owner, when the vault is emptied, the agent's access
-  is revoked, the vault changes owner, or the token is no longer allowed.
+  is revoked, the vault changes owner, or the vault's token settings are changed.
+- **Orders fit the vault's daily limit.** A buy is made smaller, and a sale is split over the following hours,
+  when the limit has less room than the order needs. The decision says so.
+- **A vault that changes owner** (a transfer the new wallet accepts within 7 days, or a recovery) starts with
+  the agent's access switched off. The new owner switches it on again on the Vault page and launches their
+  own agent.
 
 ## Rehearsing with fake money
 
-Everything above can be rehearsed against a local copy of Robinhood Chain (real pools and price feeds, fake
-money):
+The Safe, deploy and open steps can be rehearsed against a local copy of Robinhood Chain (real pools and price
+feeds, fake money):
 
 ```bash
 FORK=1 pnpm --filter @rationale/contracts exec hardhat node            # terminal 1
 node scripts/go-live.mjs status --network localhost                    # terminal 2, and so on
 ```
 
-`contracts/scripts/fork-setup.js` deploys with Hardhat's public test accounts and gives a wallet fake USDG.
+A rehearsal never reads this server's keys and never writes `.env`. It signs with Hardhat's public test
+accounts only: the local copy has the real chain's id, so anything signed for it with a real key would also
+be valid on the real chain. `contracts/scripts/fork-setup.js` deploys with the same test accounts, gives a
+wallet fake USDG, and prints the test operator key for a local engine.

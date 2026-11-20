@@ -1,6 +1,10 @@
 /** API configuration from the environment. Secrets are never written in code. */
 import { CHAIN, LIVE } from "@rationale/config";
 
+// The API never signs anything. It is started from the same .env as the engine, so the keys in that file are
+// dropped from this process before anything else runs: a bug here can then never read or leak them.
+for (const name of ["OPERATOR_PRIVATE_KEY", "DEPLOYER_PRIVATE_KEY"]) delete process.env[name];
+
 /** Unset: the beta cap. "0" or "none": no cap. Anything else: that many dollars. */
 function maxVaultUsd(raw: string | undefined): number | null {
   const v = raw?.trim().toLowerCase();

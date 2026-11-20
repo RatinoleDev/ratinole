@@ -41,7 +41,7 @@ describe('DecisionRegistry', function () {
     [admin, poster, stranger, next] = await ethers.getSigners();
     reg = await ethers.deployContract('DecisionRegistry', [admin.address, poster.address]);
     const now = await time.latest();
-    hour = BigInt(now - (now % HOUR));
+    hour = BigInt(now - (now % HOUR) - HOUR); // the newest hour that is over
   });
 
   it('the poster records one root per past hour, and it verifies the decisions in it', async () => {
@@ -60,9 +60,19 @@ describe('DecisionRegistry', function () {
     await expect(reg.connect(poster).post(hour, id('root-2'), 1)).to.be.revertedWithCustomError(reg, 'AlreadyPosted');
   });
 
+  it('refuses the hour still in progress until it is over', async () => {
+    const current = hour + BigInt(HOUR);
+    await expect(reg.connect(poster).post(current, id('early'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+    await time.setNextBlockTimestamp(current + BigInt(HOUR) - 1n);
+    await expect(reg.connect(poster).post(current, id('early'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+    await time.setNextBlockTimestamp(current + BigInt(HOUR));
+    await expect(reg.connect(poster).post(current, id('complete'), 4)).to.emit(reg, 'RootPosted').withArgs(current, id('complete'), 4);
+  });
+
   it('refuses hours that are not on the hour or still in the future, and empty roots', async () => {
     await expect(reg.connect(poster).post(hour + 60n, id('r'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
     await expect(reg.connect(poster).post(hour + BigInt(HOUR), id('r'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
+    await expect(reg.connect(poster).post(hour + 2n * BigInt(HOUR), id('r'), 1)).to.be.revertedWithCustomError(reg, 'BadHour');
     await expect(reg.connect(poster).post(hour, ethers.ZeroHash, 1)).to.be.revertedWithCustomError(reg, 'EmptyRoot');
     await expect(reg.connect(poster).post(hour, id('r'), 0)).to.be.revertedWithCustomError(reg, 'EmptyRoot');
   });
