@@ -41,7 +41,9 @@ async function main() {
       amountOut: ethers.parseUnits(String(usd), 6), amountInMaximum: spend, sqrtPriceLimitX96: 0,
     })
   ).wait();
-  if (target.toLowerCase() !== owner.address.toLowerCase()) await (await deployer.sendTransaction({ to: target, value: ethers.parseEther('1') })).wait();
+  // Test ETH for network fees. Set directly: some well-known test addresses carry code on the real chain, and
+  // a plain transfer to them fails.
+  if (target.toLowerCase() !== owner.address.toLowerCase()) await ethers.provider.send('hardhat_setBalance', [target, ethers.toBeHex(ethers.parseEther('1'))]);
 
   let vault = null;
   if (process.env.VAULT) {

@@ -44,7 +44,7 @@ const NAV: NavItem[] = [
   {
     href: "/app/vault",
     label: "Vault",
-    sub: "The limits a vault enforces. Opens with live trading.",
+    sub: "Real money in a vault only your wallet can withdraw from.",
     icon: "M12 3l7.5 3v5.5c0 4.5-3.1 8-7.5 9.5-4.4-1.5-7.5-5-7.5-9.5V6ZM9 12l2.2 2.2L15.2 10",
   },
   {

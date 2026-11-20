@@ -43,9 +43,12 @@ async function main() {
     safe, operator, poster, timelockDelaySeconds: delay,
     timelock: d.timelock, factory: d.factory, registry: d.registry,
   };
+  // Print first: the addresses must reach the screen even if the record file cannot be written.
+  console.log(`\nDeployed and verified:\n  timelock ${d.timelock}\n  factory  ${d.factory}\n  registry ${d.registry}`);
   const file = path.join(__dirname, '..', 'deployments', `${network.name}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
-  console.log(`\nDeployed and verified:\n  timelock ${d.timelock}\n  factory  ${d.factory}\n  registry ${d.registry}\nWritten to ${file}`);
+  console.log(`Written to ${file}`);
 }
 
 main().catch((e) => {
