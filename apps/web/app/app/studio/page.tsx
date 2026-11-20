@@ -18,7 +18,7 @@ const MAX_SENTENCE = 600;
 const STEPS = ["Describe", "Check the reading", "Backtest", "Launch"];
 
 const DEFAULT_SENTENCE =
-  "Buy ETH when RSI drops below 30 in an uptrend, skip if there is bad news, take profit at 8% and stop at 4%, use 25% per trade";
+  "Buy ETH when RSI drops below 30 in an uptrend, stay out when the market is stressed, take profit at 8% and stop at 4%, use 25% per trade";
 
 const CHIPS = [
   {
