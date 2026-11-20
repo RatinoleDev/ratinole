@@ -107,7 +107,7 @@ export function mountRobot(canvas: HTMLCanvasElement, { motion, mood: firstMood 
 
   const ceramic = keep(new MeshPhysicalMaterial({ color: "#DDD9CF", roughness: 0.36, metalness: 0.02, clearcoat: 0.8, clearcoatRoughness: 0.16, envMapIntensity: 0.42 }));
   const graphite = keep(new MeshStandardMaterial({ color: "#26262A", roughness: 0.42, metalness: 0.55, envMapIntensity: 0.8 }));
-  const glass = keep(new MeshPhysicalMaterial({ color: "#050506", roughness: 0.22, metalness: 0.1, clearcoat: 0.5, clearcoatRoughness: 0.2, envMapIntensity: 0.16 }));
+  const glass = keep(new MeshPhysicalMaterial({ color: "#060607", roughness: 0.5, metalness: 0, clearcoat: 0.3, clearcoatRoughness: 0.5, envMapIntensity: 0.1 }));
   const eyeMat = keep(new MeshBasicMaterial({ color: LIME, toneMapped: false }));
   const glowMat = keep(new MeshBasicMaterial({ color: LIME, toneMapped: false }));
   const gemMat = keep(new MeshPhysicalMaterial({ color: LIME, emissive: new Color("#8CC200"), emissiveIntensity: 0.9, roughness: 0.2, clearcoat: 1, flatShading: true }));
