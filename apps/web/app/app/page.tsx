@@ -27,7 +27,7 @@ export default function OverviewPage() {
     <section>
       <div className="kpis">
         <div className="kpi">
-          <small>{live ? "Value in your vault" : "Portfolio value"}</small>
+          <small>{live ? "Value at the last decision" : "Portfolio value"}</small>
           <b className="num">{k ? usd(k.equity, live ? 2 : 0) : "–"}</b>
         </div>
         <div className="kpi">

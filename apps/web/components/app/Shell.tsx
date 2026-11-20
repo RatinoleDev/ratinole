@@ -19,7 +19,7 @@ const NAV: NavItem[] = [
   {
     href: "/app",
     label: "Overview",
-    sub: "Your paper agents against simply holding.",
+    sub: "Your agents against simply holding.",
     icon: "M4 4h6.5v6.5H4ZM13.5 4H20v6.5h-6.5ZM4 13.5h6.5V20H4ZM13.5 13.5H20V20h-6.5Z",
   },
   {
@@ -134,7 +134,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const toast = useToast();
   const { me } = useSession();
-  const { mode, setMode, liveOn } = useMode();
+  const { mode, setMode, liveOn, status } = useMode();
   const nav = useRef<HTMLElement>(null);
   // On a phone the links are one row that scrolls sideways: keep the current page's link in view.
   useEffect(() => {
@@ -192,7 +192,7 @@ export function Shell({ children }: { children: ReactNode }) {
               className={mode === "live" ? "on" : undefined}
               aria-pressed={mode === "live"}
               disabled={!liveOn}
-              title={liveOn ? "Real money in your own vault" : "Live trading opens with vaults"}
+              title={liveOn ? "Real money in your own vault" : status === "ready" ? "Live trading opens with vaults" : status === "loading" ? "Checking whether live trading is open…" : "The server could not be reached"}
               onClick={() => {
                 setMode("live");
                 toast("Live mode: real money in your own vault.");

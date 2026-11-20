@@ -5,7 +5,7 @@
  * from the chain, and every change is a transaction the owner signs in their own wallet. The site holds no key.
  * Until live trading is open on this site, the page is a preview of how a vault works.
  */
-import { CHAIN, ERC20_ABI, FACTORY_ABI, VAULT_ABI, explorerAddress, fromUnits, type ChainConfigDTO } from "@rationale/config";
+import { CHAIN, ERC20_ABI, FACTORY_ABI, VAULT_ABI, explorerAddress, fromUnits, parseAmount, type ChainConfigDTO } from "@rationale/config";
 import { useEffect, useMemo, useState } from "react";
 import { formatUnits, parseUnits, zeroAddress, type Abi, type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
@@ -80,10 +80,11 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
         <input type="range" min={0.1} max={5} step={0.1} value={slip} onChange={(e) => setSlip(Number(e.target.value))} disabled={disabled} />
       </label>
       <div className="worst">
-        <small>Most a stolen agent key could cost you per day</small>
+        <small>Most a stolen agent key could cost you in one 24-hour window</small>
         <b className="num">${worstCase(limit, slip).toFixed(2)}</b>
         <small>
-          Daily limit × (slippage + {POOL_FEE_PCT}% pool fee + {ORACLE_LAG_PCT}% oracle lag). You stop it by pausing.
+          Daily limit × (slippage + {POOL_FEE_PCT}% pool fee + {ORACLE_LAG_PCT}% oracle lag). The windows are fixed, so around the end of one it can be twice this
+          within a short time. You stop it by pausing.
         </small>
       </div>
     </>
@@ -92,7 +93,7 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
 
 /** Shown while live trading is not open: how a vault will work. */
 function VaultPreview() {
-  const [limit, setLimit] = useState(500);
+  const [limit, setLimit] = useState(200);
   const [slip, setSlip] = useState(1);
   const soon = "Vaults open with live trading";
   return (
@@ -138,7 +139,7 @@ function RiskNote({ cap, trading }: { cap: number | null; trading: boolean }) {
   );
 }
 
-function CreateVault({ chain, canSign, onCreated }: { chain: ChainConfigDTO; canSign: boolean; onCreated: () => void }) {
+function CreateVault({ chain, canSign, degraded, onCreated }: { chain: ChainConfigDTO; canSign: boolean; degraded: boolean; onCreated: () => void }) {
   const [limit, setLimit] = useState(chain.limits.defaultDailyLimitUsd);
   const [slip, setSlip] = useState(chain.limits.defaultSlippageBps / 100);
   const tx = useTx(onCreated);
@@ -158,9 +159,10 @@ function CreateVault({ chain, canSign, onCreated }: { chain: ChainConfigDTO; can
       <div className="ctrl">
         <LimitSliders limit={limit} slip={slip} setLimit={setLimit} setSlip={setSlip} />
         <div>
-          <button className="btn blue" onClick={() => void create()} disabled={!canSign || !!tx.busy}>
+          <button className="btn blue" onClick={() => void create()} disabled={!canSign || !!tx.busy || degraded}>
             {tx.busy ? "Check your wallet…" : "Create my vault"}
           </button>
+          {degraded && <p className="hint">Creating a vault is off until this site's server answers again.</p>}
         </div>
       </div>
     </div>
@@ -169,8 +171,50 @@ function CreateVault({ chain, canSign, onCreated }: { chain: ChainConfigDTO; can
 
 type Asset = { symbol: string; address: Address; decimals: number; raw: bigint; price: number | null };
 
-function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; vault: Address; owner: Address; canSign: boolean }) {
-  // Read as one batch. The calls are a plain list, so results are picked by position below.
+/**
+ * One complete reading of the vault. It exists only when every call it needs answered: a balance or a limit
+ * that could not be read is never shown as zero or as a default. A token's price alone may be missing (the
+ * oracle refuses to give a stale one), and is then shown as missing.
+ */
+interface Reading {
+  paused: boolean;
+  operator: Address;
+  slipBps: number;
+  limit: bigint;
+  remaining: bigint;
+  walletStable: bigint;
+  /** The agent's key, as the factory on-chain names it today. */
+  agentKey: Address;
+  assets: Asset[];
+}
+type Outcome = { status: "success" | "failure"; result?: unknown };
+
+function toReading(r: readonly Outcome[] | undefined, chain: ChainConfigDTO): Reading | null {
+  if (!r) return null;
+  const ok = (i: number) => r[i]?.status === "success";
+  const at = <T,>(i: number) => r[i]!.result as T;
+  for (let i = 0; i <= 7; i++) if (!ok(i)) return null;
+  const assets: Asset[] = [{ symbol: chain.stable.symbol, address: chain.stable.address as Address, decimals: chain.stable.decimals, raw: at<bigint>(5), price: 1 }];
+  for (const [k, t] of chain.tokens.entries()) {
+    if (!ok(8 + 2 * k)) return null;
+    assets.push({ symbol: t.symbol, address: t.address as Address, decimals: t.decimals, raw: at<bigint>(8 + 2 * k), price: ok(9 + 2 * k) ? fromUnits(at<bigint>(9 + 2 * k), 18) : null });
+  }
+  return {
+    paused: at<boolean>(0),
+    operator: at<Address>(1),
+    slipBps: Number(at<number>(2)),
+    limit: at<bigint>(3),
+    remaining: at<bigint>(4),
+    walletStable: at<bigint>(6),
+    agentKey: at<Address>(7),
+    assets,
+  };
+}
+
+const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+function ManageVault({ chain, vault, owner, canSign, degraded }: { chain: ChainConfigDTO; vault: Address; owner: Address; canSign: boolean; degraded: boolean }) {
+  // Read as one batch. The calls are a plain list, so results are picked by position in `toReading`.
   const stable = chain.stable;
   const contracts = useMemo(() => {
     const call = (address: string, abi: Abi, functionName: string, args: readonly unknown[] = []) => ({ address: address as Address, abi, functionName, args, chainId: CHAIN.id });
@@ -184,76 +228,75 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
       call(vault, va, "remainingDailyUsd"),
       call(stable.address, erc, "balanceOf", [vault]),
       call(stable.address, erc, "balanceOf", [owner]),
+      call(chain.factory as Address, FACTORY_ABI as Abi, "defaultOperator"),
       ...chain.tokens.flatMap((t) => [call(t.address, erc, "balanceOf", [vault]), call(vault, va, "priceUsd", [t.address])]),
     ];
-  }, [chain.tokens, owner, stable.address, vault]);
+  }, [chain.factory, chain.tokens, owner, stable.address, vault]);
   const reads = useReadContracts({ allowFailure: true, contracts, query: { refetchInterval: 20_000 } });
   const tx = useTx(() => void reads.refetch());
-  const r = reads.data;
-  const get = <T,>(i: number): T | null => (r && r[i]?.status === "success" ? (r[i]!.result as T) : null);
 
-  const paused = get<boolean>(0);
-  const operator = get<Address>(1);
-  const chainSlipBps = get<number>(2);
-  const chainLimit = get<bigint>(3);
-  const remaining = get<bigint>(4);
-  const walletStable = get<bigint>(6) ?? 0n;
-  const assets: Asset[] = useMemo(
-    () => [
-      { symbol: stable.symbol, address: stable.address as Address, decimals: stable.decimals, raw: (r && r[5]?.status === "success" ? (r[5].result as bigint) : 0n), price: 1 },
-      ...chain.tokens.map((t, k) => {
-        const bal = r?.[7 + 2 * k];
-        const px = r?.[8 + 2 * k];
-        return {
-          symbol: t.symbol,
-          address: t.address as Address,
-          decimals: t.decimals,
-          raw: bal?.status === "success" ? (bal.result as bigint) : 0n,
-          price: px?.status === "success" ? fromUnits(px.result as bigint, 18) : null,
-        };
-      }),
-    ],
-    [chain.tokens, r, stable],
-  );
-  const total = assets.reduce((s, a) => s + fromUnits(a.raw, a.decimals) * (a.price ?? 0), 0);
-  const agentOn = !!operator && !!chain.operator && operator.toLowerCase() === chain.operator.toLowerCase();
+  // The newest complete reading. If a later poll fails, or comes back with a hole in it, the last complete one
+  // stays on screen, marked as old, instead of zeros.
+  const latest = useMemo(() => toReading(reads.data as readonly Outcome[] | undefined, chain), [reads.data, chain]);
+  const [kept, setKept] = useState<{ reading: Reading; at: number } | null>(null);
+  useEffect(() => {
+    if (latest) setKept({ reading: latest, at: reads.dataUpdatedAt || Date.now() });
+  }, [latest, reads.dataUpdatedAt]);
+  const v = latest ?? kept?.reading ?? null;
+  const old = !!v && (reads.isError || !latest);
 
-  // Limits start from what the vault enforces now, and follow it until the owner moves a slider.
+  // The sliders follow the vault until the owner moves one. Only a value the owner chose is ever sent.
   const [limit, setLimit] = useState<number | null>(null);
   const [slip, setSlip] = useState<number | null>(null);
-  const liveLimit = chainLimit != null ? Math.round(fromUnits(chainLimit, 18)) : null;
-  const liveSlip = chainSlipBps != null ? chainSlipBps / 100 : null;
-  const shownLimit = limit ?? liveLimit ?? chain.limits.defaultDailyLimitUsd;
-  const shownSlip = slip ?? liveSlip ?? chain.limits.defaultSlippageBps / 100;
-  const limitsChanged = (limit != null && limit !== liveLimit) || (slip != null && slip !== liveSlip);
+  const liveLimit = v ? Math.round(fromUnits(v.limit, 18)) : null;
+  const liveSlip = v ? v.slipBps / 100 : null;
   useEffect(() => {
     // After a save the chain agrees with the sliders again: let them follow the chain.
-    if (limit === liveLimit) setLimit(null);
-    if (slip === liveSlip) setSlip(null);
+    if (limit != null && limit === liveLimit) setLimit(null);
+    if (slip != null && slip === liveSlip) setSlip(null);
   }, [limit, liveLimit, slip, liveSlip]);
 
   const [deposit, setDeposit] = useState("");
   const [take, setTake] = useState("");
   const [takeSym, setTakeSym] = useState(stable.symbol);
+
+  if (!v) {
+    return (
+      <div className="panel">
+        <p className="empty">
+          {reads.isLoading
+            ? "Reading your vault from Robinhood Chain…"
+            : "Your vault could not be read from Robinhood Chain just now. It is untouched; this page tries again every few seconds."}
+        </p>
+      </div>
+    );
+  }
+
+  const assets = v.assets;
   const takeAsset = assets.find((a) => a.symbol === takeSym) ?? assets[0]!;
-  const parse = (text: string, decimals: number): bigint | null => {
-    if (!/^\d+(\.\d+)?$/.test(text.trim())) return null;
-    try {
-      const n = parseUnits(text.trim(), decimals);
-      return n > 0n ? n : null;
-    } catch {
-      return null;
-    }
-  };
-  const depositRaw = parse(deposit, stable.decimals);
-  const takeRaw = parse(take, takeAsset.decimals);
-  const depositOk = depositRaw != null && depositRaw <= walletStable;
-  const takeOk = takeRaw != null && takeRaw <= takeAsset.raw;
+  const dep = parseAmount(deposit, stable.decimals);
+  const out = parseAmount(take, takeAsset.decimals);
+  const depositOk = dep.ok && dep.raw <= v.walletStable;
+  const takeOk = out.ok && out.raw <= takeAsset.raw;
   const off = !canSign || !!tx.busy;
   const vaultAbi = VAULT_ABI as Abi;
 
-  if (reads.isLoading) return <div className="panel"><p className="empty">Reading your vault from Robinhood Chain…</p></div>;
-  if (!r) return <div className="panel"><p className="empty">Robinhood Chain could not be reached. Your vault is safe; try again in a moment.</p></div>;
+  const unpriced = assets.filter((a) => a.raw > 0n && a.price == null).map((a) => a.symbol);
+  const total = assets.reduce((sum, a) => sum + fromUnits(a.raw, a.decimals) * (a.price ?? 0), 0);
+  // Three states, not two: another key holding access must never read as "off".
+  const access: "agent" | "none" | "other" = v.operator === zeroAddress ? "none" : sameAddress(v.operator, v.agentKey) ? "agent" : "other";
+
+  const shownLimit = limit ?? liveLimit!;
+  const shownSlip = slip ?? liveSlip!;
+  const limitsChanged = (limit != null && limit !== liveLimit) || (slip != null && slip !== liveSlip);
+  // The limit that was not touched is sent back exactly as the vault holds it, not as the rounded number on screen.
+  const saveLimits = () =>
+    tx.send(
+      "limits",
+      { address: vault, abi: vaultAbi, functionName: "setLimits", args: [slip != null ? Math.round(slip * 100) : v.slipBps, limit != null ? parseUnits(String(limit), 18) : v.limit] },
+      "Limits saved.",
+    );
+  const setOperator = (label: string, to: Address, done: string) => tx.send(label, { address: vault, abi: vaultAbi, functionName: "setOperator", args: [to] }, done);
 
   return (
     <div className="vaultcol">
@@ -265,10 +308,18 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
           </a>
           . Only your wallet can withdraw.
         </p>
+        {old && (
+          <p className="risknote" role="status">
+            Robinhood Chain could not be reached just now. These numbers are from {new Date(kept?.at ?? Date.now()).toLocaleTimeString()}; the page keeps trying.
+          </p>
+        )}
         <div className="vtotal">
-          <small>Value now</small>
+          <small>{unpriced.length ? `Value now, without ${unpriced.join(" and ")}` : "Value now"}</small>
           <b className="num">{usd(total, 2)}</b>
         </div>
+        {unpriced.length > 0 && (
+          <p className="hint">The price oracle has no fresh price for {unpriced.join(" and ")} right now, so it is left out of the total. The tokens are in your vault all the same.</p>
+        )}
         <table className="vassets">
           <tbody>
             {assets.map((a) => {
@@ -277,20 +328,18 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
                 <tr key={a.symbol}>
                   <td>{a.symbol}</td>
                   <td className="r num">{qty === 0 ? "0" : qty >= 1 ? qty.toLocaleString("en-US", { maximumFractionDigits: 4 }) : qty.toPrecision(4)}</td>
-                  <td className="r num">{a.price == null ? "no price" : usd(qty * a.price, 2)}</td>
+                  <td className="r num">{a.price == null ? "no price now" : usd(qty * a.price, 2)}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
         <div className="vchips">
-          <span className={`stat ${agentOn ? "on" : "off"}`}>Agent access {agentOn ? "on" : "off"}</span>
-          <span className={`stat ${paused ? "off" : "on"}`}>{paused ? "Paused" : "Not paused"}</span>
-          {remaining != null && chainLimit != null && (
-            <span className="stat">
-              {usd(fromUnits(remaining, 18))} of {usd(fromUnits(chainLimit, 18))} left to trade today
-            </span>
-          )}
+          <span className={`stat ${access === "agent" ? "on" : "off"}`}>{access === "agent" ? "Agent access on" : access === "none" ? "Agent access off" : "Another key has access"}</span>
+          <span className={`stat ${v.paused ? "off" : "on"}`}>{v.paused ? "Paused" : "Not paused"}</span>
+          <span className="stat">
+            {usd(fromUnits(v.remaining, 18))} of {usd(fromUnits(v.limit, 18))} left to trade in this 24-hour window
+          </span>
         </div>
       </div>
 
@@ -300,25 +349,31 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
         <div className="vform">
           <label htmlFor="v-dep">Deposit USDG</label>
           <div className="vfield">
-            <input id="v-dep" type="text" inputMode="decimal" placeholder="0.00" value={deposit} onChange={(e) => setDeposit(e.target.value)} />
-            <button className="btn sm ghost" type="button" onClick={() => setDeposit(formatUnits(walletStable, stable.decimals))}>
+            <input id="v-dep" type="text" inputMode="decimal" placeholder="0.00" value={deposit} onChange={(e) => setDeposit(e.target.value)} aria-describedby="v-dep-note" />
+            <button className="btn sm ghost" type="button" onClick={() => setDeposit(formatUnits(v.walletStable, stable.decimals))}>
               Max
             </button>
             <button
               className="btn sm blue"
-              disabled={off || !depositOk}
+              disabled={off || !depositOk || degraded}
               onClick={() =>
+                dep.ok &&
                 void tx
-                  .send("deposit", { address: stable.address as Address, abi: ERC20_ABI as Abi, functionName: "transfer", args: [vault, depositRaw!] }, "Deposited into your vault.")
+                  .send("deposit", { address: stable.address as Address, abi: ERC20_ABI as Abi, functionName: "transfer", args: [vault, dep.raw] }, "Deposited into your vault.")
                   .then((ok) => ok && setDeposit(""))
               }
             >
               {tx.busy === "deposit" ? "Check your wallet…" : "Deposit"}
             </button>
           </div>
-          <small>
-            In your wallet: {usd(fromUnits(walletStable, stable.decimals), 2)} of {stable.symbol}
-            {depositRaw != null && !depositOk ? ". That is more than your wallet holds." : ""}
+          <small id="v-dep-note">
+            {degraded
+              ? "Deposits are off until this site's server answers again. Withdrawals work."
+              : !dep.ok && dep.error
+                ? dep.error
+                : dep.ok && !depositOk
+                  ? `That is more than the ${usd(fromUnits(v.walletStable, stable.decimals), 2)} of ${stable.symbol} in your wallet.`
+                  : `In your wallet: ${usd(fromUnits(v.walletStable, stable.decimals), 2)} of ${stable.symbol}.${dep.ok && dep.note ? ` ${dep.note}` : ""}`}
           </small>
         </div>
         <div className="vform">
@@ -329,7 +384,7 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
                 <option key={a.symbol}>{a.symbol}</option>
               ))}
             </select>
-            <input id="v-out" type="text" inputMode="decimal" placeholder="0.00" value={take} onChange={(e) => setTake(e.target.value)} />
+            <input id="v-out" type="text" inputMode="decimal" placeholder="0.00" value={take} onChange={(e) => setTake(e.target.value)} aria-describedby="v-out-note" />
             <button className="btn sm ghost" type="button" onClick={() => setTake(formatUnits(takeAsset.raw, takeAsset.decimals))}>
               Max
             </button>
@@ -337,15 +392,18 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
               className="btn sm"
               disabled={off || !takeOk}
               onClick={() =>
+                out.ok &&
                 void tx
-                  .send("withdraw", { address: vault, abi: vaultAbi, functionName: "withdraw", args: [takeAsset.address, takeRaw!, owner] }, "Withdrawn to your wallet.")
+                  .send("withdraw", { address: vault, abi: vaultAbi, functionName: "withdraw", args: [takeAsset.address, out.raw, owner] }, "Withdrawn to your wallet.")
                   .then((ok) => ok && setTake(""))
               }
             >
               {tx.busy === "withdraw" ? "Check your wallet…" : "Withdraw"}
             </button>
           </div>
-          {takeRaw != null && !takeOk && <small>That is more than the vault holds.</small>}
+          <small id="v-out-note">
+            {!out.ok && out.error ? out.error : out.ok && !takeOk ? `That is more than the vault holds of ${takeAsset.symbol}.` : out.ok && out.note ? out.note : `It goes to ${shortAddress(owner)}, the wallet you signed in with.`}
+          </small>
         </div>
       </div>
 
@@ -354,34 +412,36 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
         <p className="hint">The agent cannot change these. Only your wallet can.</p>
         <div className="ctrl">
           <LimitSliders limit={shownLimit} slip={shownSlip} setLimit={setLimit} setSlip={setSlip} disabled={off} />
+          {access === "other" && (
+            <p className="risknote" role="note">
+              <b>A key that is not Ratinole's agent can trade this vault:</b>{" "}
+              <a href={explorerAddress(chain.explorerUrl, v.operator)} target="_blank" rel="noopener noreferrer">
+                {shortAddress(v.operator)}
+              </a>
+              . If you did not set that yourself, revoke it. Ratinole's agent cannot trade until you switch access to it.
+            </p>
+          )}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button
-              className="btn sm blue"
-              disabled={off || !limitsChanged}
-              onClick={() => void tx.send("limits", { address: vault, abi: vaultAbi, functionName: "setLimits", args: [Math.round(shownSlip * 100), parseUnits(String(shownLimit), 18)] }, "Limits saved.")}
-            >
+            <button className="btn sm blue" disabled={off || !limitsChanged} onClick={() => void saveLimits()}>
               {tx.busy === "limits" ? "Check your wallet…" : "Save limits"}
             </button>
             <button
               className="btn sm"
-              disabled={off || paused == null}
-              onClick={() => void tx.send("pause", { address: vault, abi: vaultAbi, functionName: "setPaused", args: [!paused] }, paused ? "Vault resumed." : "Vault paused. The agent cannot trade it.")}
+              disabled={off}
+              onClick={() => void tx.send("pause", { address: vault, abi: vaultAbi, functionName: "setPaused", args: [!v.paused] }, v.paused ? "Vault resumed." : "Vault paused. The agent cannot trade it.")}
             >
-              {tx.busy === "pause" ? "Check your wallet…" : paused ? "Resume vault" : "Pause vault"}
+              {tx.busy === "pause" ? "Check your wallet…" : v.paused ? "Resume vault" : "Pause vault"}
             </button>
-            <button
-              className="btn sm ghost"
-              disabled={off || !chain.operator}
-              onClick={() =>
-                void tx.send(
-                  "access",
-                  { address: vault, abi: vaultAbi, functionName: "setOperator", args: [agentOn ? zeroAddress : chain.operator] },
-                  agentOn ? "Agent access revoked." : "Agent access restored.",
-                )
-              }
-            >
-              {tx.busy === "access" ? "Check your wallet…" : agentOn ? "Revoke agent access" : "Restore agent access"}
-            </button>
+            {access !== "none" && (
+              <button className="btn sm ghost" disabled={off} onClick={() => void setOperator("revoke", zeroAddress, "Access revoked. No key can trade this vault now.")}>
+                {tx.busy === "revoke" ? "Check your wallet…" : access === "agent" ? "Revoke agent access" : "Revoke that key's access"}
+              </button>
+            )}
+            {access !== "agent" && (
+              <button className="btn sm ghost" disabled={off || degraded || v.agentKey === zeroAddress} onClick={() => void setOperator("access", v.agentKey, "Ratinole's agent can trade this vault now.")}>
+                {tx.busy === "access" ? "Check your wallet…" : access === "none" ? "Restore agent access" : "Switch access to Ratinole's agent"}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -389,7 +449,7 @@ function ManageVault({ chain, vault, owner, canSign }: { chain: ChainConfigDTO; 
   );
 }
 
-function LiveVault({ chain }: { chain: ChainConfigDTO }) {
+function LiveVault({ chain, degraded }: { chain: ChainConfigDTO; degraded: boolean }) {
   const { me, signIn, signingIn } = useSession();
   const { address, isConnected } = useAccount();
   const owner = (me?.address ?? zeroAddress) as Address;
@@ -404,10 +464,19 @@ function LiveVault({ chain }: { chain: ChainConfigDTO }) {
   if (!me) return <ConnectPanel text="Sign in with your wallet to create or manage your vault." />;
   // Signing needs the same wallet that signed in to be connected in this browser.
   const canSign = isConnected && address?.toLowerCase() === me.address.toLowerCase();
+  // Once the answer is known it is kept: a later poll that fails must not take the vault off the screen, or
+  // offer "create a vault" to someone who has one.
+  const known = vaultQ.data !== undefined;
   const vault = vaultQ.data && vaultQ.data !== zeroAddress ? (vaultQ.data as Address) : null;
   return (
     <section>
       <RiskNote cap={chain.limits.maxVaultUsd} trading={chain.trading} />
+      {degraded && (
+        <p className="risknote" role="status">
+          <b>This site's server cannot be reached.</b> Your vault is shown straight from Robinhood Chain, at the contract address this device saw last time. You can
+          withdraw, pause and revoke. Deposits and new vaults are off until the server answers again.
+        </p>
+      )}
       {!canSign && (
         <div className="panel connect" style={{ marginBottom: 20 }}>
           <p>
@@ -423,18 +492,18 @@ function LiveVault({ chain }: { chain: ChainConfigDTO }) {
         </div>
       )}
       <div className="grid2">
-        {vaultQ.isLoading ? (
+        {!known ? (
           <div className="panel">
-            <p className="empty">Looking for your vault on Robinhood Chain…</p>
-          </div>
-        ) : vaultQ.isError ? (
-          <div className="panel">
-            <p className="empty">Robinhood Chain could not be reached. Try again in a moment.</p>
+            <p className="empty">
+              {vaultQ.isError
+                ? "Robinhood Chain could not be reached, so this page cannot tell yet whether you have a vault. If you have one, it is untouched. Trying again…"
+                : "Looking for your vault on Robinhood Chain…"}
+            </p>
           </div>
         ) : vault ? (
-          <ManageVault chain={chain} vault={vault} owner={owner} canSign={canSign} />
+          <ManageVault chain={chain} vault={vault} owner={owner} canSign={canSign} degraded={degraded} />
         ) : (
-          <CreateVault chain={chain} canSign={canSign} onCreated={() => void vaultQ.refetch()} />
+          <CreateVault chain={chain} canSign={canSign} degraded={degraded} onCreated={() => void vaultQ.refetch()} />
         )}
         <WhoCanDoWhat hint="Enforced by your vault's contract, not by this site." />
       </div>
@@ -443,7 +512,25 @@ function LiveVault({ chain }: { chain: ChainConfigDTO }) {
 }
 
 export default function VaultPage() {
-  const { liveOn, chain } = useMode();
+  const { liveOn, chain, status, degraded, retry } = useMode();
+  // "Vaults are not open" is only said once the server has said so.
+  if (status === "loading") {
+    return (
+      <div className="panel">
+        <p className="empty">Checking whether live trading is open…</p>
+      </div>
+    );
+  }
+  if (status === "error") {
+    return (
+      <div className="panel connect">
+        <p>This site's server could not be reached, so this page cannot show a vault right now. If you have a vault, it is untouched on Robinhood Chain.</p>
+        <button className="btn sm" onClick={retry}>
+          Try again
+        </button>
+      </div>
+    );
+  }
   if (!liveOn || !chain) return <VaultPreview />;
-  return <LiveVault chain={chain} />;
+  return <LiveVault chain={chain} degraded={degraded} />;
 }

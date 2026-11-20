@@ -51,7 +51,16 @@ export function useTx(onDone?: () => void) {
         // The call is shaped at run time, so it is passed on without the ABI's compile-time types.
         const hash = await writeContractAsync({ ...call, chainId: CHAIN.id } as never);
         toast("Sent. Waiting for the chain to confirm…");
-        const receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: CHAIN.id });
+        let receipt;
+        try {
+          receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: CHAIN.id, timeout: 90_000 });
+        } catch {
+          // The wallet has sent it; only the answer is missing. It may still go through, so this must not read
+          // as a failure, and the person must not be nudged into sending it a second time.
+          toast("Sent, but the chain has not confirmed it yet. It may still go through: check your wallet's activity before trying again.");
+          onDone?.();
+          return false;
+        }
         if (receipt.status !== "success") {
           toast("The chain refused the transaction. Nothing changed.");
           return false;

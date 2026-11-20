@@ -62,7 +62,13 @@ function AgentCard({ agent, first }: { agent: AgentDTO; first: boolean }) {
 
   async function remove() {
     const ok = window.confirm(
-      `Delete ${agent.name}? It stops running and leaves your list and the leaderboard. Its past decisions stay on record. This cannot be undone.`,
+      agent.mode === "live"
+        ? `Delete ${agent.name}? It stops trading your vault. ${
+            agent.inPosition
+              ? `It is holding ${agent.market} right now, and deleting does NOT sell it: the tokens stay in your vault, where their price keeps moving until you withdraw them or another agent sells them. `
+              : "Your money stays in your vault. "
+          }Its past decisions stay on record. This cannot be undone.`
+        : `Delete ${agent.name}? It stops running and leaves your list and the leaderboard. Its past decisions stay on record. This cannot be undone.`,
     );
     if (!ok) return;
     setBusy(true);

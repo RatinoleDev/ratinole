@@ -63,5 +63,39 @@ export function toUnits(amount: number, decimals: number): bigint {
   return fromUnits(raw, decimals) > amount ? raw - 1n : raw;
 }
 
+export type ParsedAmount =
+  | { ok: true; raw: bigint; /** Set when digits beyond the token's decimals were dropped. */ note: string | null }
+  | { ok: false; /** Why it cannot be used. Null while the field is empty: there is nothing to say yet. */ error: string | null };
+
+/**
+ * An amount a person typed, as raw token units. It never rounds up and never guesses: "1,000" is one in some
+ * countries and a thousand in others, so it is refused with the reason instead of being read either way.
+ * A single comma is otherwise read as the decimal mark ("10,5" is ten and a half).
+ */
+export function parseAmount(text: string, decimals: number): ParsedAmount {
+  const t = text.replace(/\s+/g, "");
+  if (t === "") return { ok: false, error: null };
+  if (!/^[0-9.,]+$/.test(t)) return { ok: false, error: "Use digits only, like 100 or 0.5." };
+  const dots = t.split(".").length - 1;
+  const commas = t.split(",").length - 1;
+  let plain = t;
+  if (commas > 0) {
+    if (dots > 0 || commas > 1) return { ok: false, error: "Write the amount without thousands separators, like 1000.50." };
+    const [head = "", tail = ""] = t.split(",");
+    if (tail.length === 3 && /[1-9]/.test(head)) return { ok: false, error: `Is that ${head}.${tail} or ${head}${tail}? Write it with a dot, or without the comma.` };
+    plain = `${head}.${tail}`;
+  } else if (dots > 1) {
+    return { ok: false, error: "Write the amount with one dot, like 1000.50." };
+  }
+  const [wholeText = "", frac = ""] = plain.split(".");
+  if (wholeText === "" && frac === "") return { ok: false, error: "Enter an amount." };
+  const whole = wholeText.replace(/^0+(?=\d)/, "") || "0";
+  const kept = frac.slice(0, decimals);
+  const dropped = /[1-9]/.test(frac.slice(decimals));
+  const raw = BigInt(whole) * 10n ** BigInt(decimals) + BigInt(kept.padEnd(decimals, "0") || "0");
+  if (raw === 0n) return { ok: false, error: dropped ? "That is smaller than the smallest amount of this token." : "Enter an amount above zero." };
+  return { ok: true, raw, note: dropped ? `Only ${decimals} decimals count: using ${whole}.${kept}.` : null };
+}
+
 export const explorerTx = (explorerUrl: string, hash: string) => `${explorerUrl}/tx/${hash}`;
 export const explorerAddress = (explorerUrl: string, address: string) => `${explorerUrl}/address/${address}`;
