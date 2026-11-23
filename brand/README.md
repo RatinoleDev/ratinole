@@ -31,6 +31,7 @@ hour; the lime facet is the decision. Light falls from the top left.
 | `social/ratinole-meet-1080x1350.jpg` | "Meet Ratinole" post image, 4:5 for the phone feed (rendered at 2x) |
 | `social/ratinole-how-it-works-1600x900.jpg` | "How it works" post image with the robot, 16:9 (rendered at 2x) |
 | `social/ratinole-how-it-works-1080x1350.jpg` | "How it works" post image with the robot, 4:5 for the phone feed (rendered at 2x) |
+| `social/ratinole-how-it-works-3000x1200.jpg` (+ `-1500x600.jpg`) | "How it works" in the X article shape (5:2), with @RatinoleHQ; made to sit under the article cover |
 
 The lettering is converted to outlines, so no font is needed to open the files.
 The crystal's seams are cut out, so the background shows through them.
