@@ -590,6 +590,12 @@ function ManageVault({
               </button>
             )}
           </div>
+          {/* A dimmed "Save limits" with no reason next to it reads as broken. It is dimmed because nothing changed. */}
+          {!limitsChanged && !old && (
+            <p className="hint" style={{ margin: "10px 0 0" }}>
+              These are the limits your vault holds now: {usd(fromUnits(v.limit, 18), 0)} a day and {shownSlip.toFixed(1)}% slippage. Move a slider to change them, then save.
+            </p>
+          )}
         </div>
       </div>
     </div>

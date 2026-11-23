@@ -262,6 +262,8 @@ test.describe("vault page", () => {
     await expect(vault.getByText("Agent access on")).toBeVisible();
     await expect(vault.getByText("Not paused")).toBeVisible();
     await expect(vault.getByText("$180 of $200 left to trade in this 24-hour window")).toBeVisible();
+    // "Save limits" is dimmed until a slider moves, and the page says why.
+    await expect(vault.getByText("These are the limits your vault holds now: $200 a day and 1.0% slippage. Move a slider to change them, then save.")).toBeVisible();
     await expect(vault.getByText("In your wallet: $40.00 of USDG.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Create my vault" })).toHaveCount(0);
     await expect(vault.getByRole("button", { name: "Revoke agent access" })).toBeVisible();
