@@ -124,8 +124,10 @@ at the moment of the order, and a swap the vault's oracle disagrees with is refu
 - **A stop that was reached stays an order to sell for up to 48 hours.** If the vault
   is paused on-chain with a stop reached and unpaused a day later, the position is sold
   in the first hour after, whatever the price is then. Tokens the owner adds meanwhile
-  are part of the position and are sold with it. After 48 hours, or when the agent is
-  paused and resumed, the stop is checked afresh. A take profit is never kept open.
+  are part of the position and are sold with it. That includes a stop recorded in an
+  hour when the vault could not be read: it is judged on the position on record, so a
+  deposit made in that same hour does not soften it. After 48 hours, or when the agent
+  is paused and resumed, the stop is checked afresh. A take profit is never kept open.
 - **Closes the agent never looked at** (the engine was down, or no feed was current)
   count for the high a trailing stop follows, but a stop that was breached only at such
   a close, and not at the one the agent sees when it is back, is not acted on.
