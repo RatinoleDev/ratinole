@@ -955,6 +955,13 @@ body:has(.appdark){background:#070708}
 .appdark .agent summary:hover{background:rgba(255,255,255,.025)}
 .appdark .agent .log{background:rgba(0,0,0,.3)}
 .appdark .bt{background:rgba(255,255,255,.025)}
+/* The backtest's four numbers sit in the narrow column of a two-column page. On a laptop that column cannot hold
+   four across (the last one ran out of its box), so there they are two rows of two. */
+@media (max-width:1560px){
+  .grid2 .bt{grid-template-columns:1fr 1fr}
+  .grid2 .bt div:nth-child(2n){border-right:0}
+  .grid2 .bt div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+}
 .appdark .worst{background:linear-gradient(135deg,rgba(198,244,50,.17),rgba(198,244,50,.03) 62%),#0D0D0F;box-shadow:inset 0 0 0 1px rgba(198,244,50,.28)}
 .appdark .worst small{color:#C9C5BC}
 .appdark .lb tbody tr:not(.sep):hover td{background:rgba(255,255,255,.025)}

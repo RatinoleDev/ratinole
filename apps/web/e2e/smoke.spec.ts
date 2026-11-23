@@ -195,7 +195,7 @@ test("studio: sentence, plan, backtest with warnings, launch", async ({ page }) 
             unseenReturnPct: -2.53,
             holdingTunedPct: -2.26,
             holdingUnseenPct: -24.44,
-            maxDrawdownPct: -2.58,
+            maxDrawdownPct: -23.94,
             tunedTrades: 6,
             unseenTrades: 4,
             paramsText: ["Buys only when confidence is at least 50%, chosen on the tuning days."],
@@ -230,6 +230,12 @@ test("studio: sentence, plan, backtest with warnings, launch", async ({ page }) 
   await expect(says).toContainText("Backtest done");
   await expect(page.getByText(/too few to tell skill from luck/)).toBeVisible();
   await expect(page.getByText("−2.5%").first()).toBeVisible();
+  // On a laptop-sized window the four numbers sit in a narrow column. None may run out of the box they are in.
+  const numbersFit = await page.locator(".bt").evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return [...el.querySelectorAll("b")].every((n) => n.getBoundingClientRect().right <= box.right);
+  });
+  expect(numbersFit).toBe(true);
   await page.getByRole("button", { name: "Launch in paper mode" }).click();
   await expect(page).toHaveURL(/\/app\/agents$/);
   expect(calls).toEqual(["intake", "backtest", "launch"]);
