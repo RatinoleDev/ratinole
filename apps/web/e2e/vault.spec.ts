@@ -55,6 +55,10 @@ interface ChainState {
   weth: bigint;
   /** 18 decimals; null = the oracle refuses (a stale price). */
   wethPrice: bigint | null;
+  /** ETH in the connected wallet, in wei. */
+  walletEth: bigint;
+  /** What the ETH/USDG pool pays for one ETH, in USDG's smallest unit. Null: the pool cannot quote (the call reverts). */
+  poolUsdgPerEth: bigint | null;
   /** Who the vault says owns it. */
   owner: string;
   pendingOwner: string;
@@ -72,6 +76,8 @@ type SentTx = { from: string; to: string; nonce: number; input: Hex };
 const healthy = (): ChainState => ({
   down: false,
   hasVault: true,
+  walletEth: 20_000_000_000_000_000n, // 0.02 ETH
+  poolUsdgPerEth: 1_990_000_000n, // $1,990, a little under the oracle's $2,000
   operator: AGENT,
   paused: false,
   vaultUsdg: 150_250_000n, // $150.25
@@ -92,6 +98,12 @@ const MULTICALL = parseAbi([
   "struct Call3 { address target; bool allowFailure; bytes callData; }",
   "struct Result { bool success; bytes returnData; }",
   "function aggregate3(Call3[] calls) payable returns (Result[] returnData)",
+]);
+const ROUTER = "0xcaf681a66d020601342297493863e78c959e5cb2";
+const SWAP_ROUTER = parseAbi([
+  "struct ExactInputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 amountIn; uint256 amountOutMinimum; uint160 sqrtPriceLimitX96; }",
+  "function exactInputSingle(ExactInputSingleParams params) payable returns (uint256 amountOut)",
+  "function multicall(uint256 deadline, bytes[] data) payable returns (bytes[])",
 ]);
 const sel = (sig: string) => toFunctionSelector(sig);
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -118,6 +130,15 @@ function answer(s: ChainState, to: string, data: Hex): Hex | null {
     if (fn === sel("recovery()")) return word("address", s.recovery);
     if (fn === sel("recoveryReadyAt()")) return word("uint64", s.recoveryReadyAt);
   }
+  // A wallet's ETH, asked for through the batching contract as the page's chain client does.
+  if (fn === sel("getEthBalance(address)")) return word("uint256", same(arg, ME) ? s.walletEth : 0n);
+  // The router quotes a swap of ETH into USDG at the pool's price, and reverts when asked for more than that.
+  if (same(to, ROUTER) && fn === toFunctionSelector(SWAP_ROUTER[0])) {
+    const [q] = decodeFunctionData({ abi: SWAP_ROUTER, data }).args as unknown as [{ amountIn: bigint; amountOutMinimum: bigint }];
+    if (s.poolUsdgPerEth == null) return null;
+    const out = (q.amountIn * s.poolUsdgPerEth) / 10n ** 18n;
+    return out >= q.amountOutMinimum ? word("uint256", out) : null;
+  }
   if (fn === sel("balanceOf(address)")) {
     if (same(to, USDG)) return word("uint256", same(arg, VAULT) ? s.vaultUsdg : same(arg, ME) ? s.walletUsdg : 0n);
     if (same(to, WETH)) return word("uint256", same(arg, VAULT) ? s.weth : 0n);
@@ -134,6 +155,7 @@ async function mockChain(page: Page, s: ChainState) {
     const reply = (result: unknown) => json(route, { jsonrpc: "2.0", id: body.id, result });
     if (body.method === "eth_chainId") return reply("0x1237");
     if (body.method === "eth_blockNumber") return reply(BLOCK);
+    if (body.method === "eth_getBalance") return reply(`0x${s.walletEth.toString(16)}`);
     const first = (body.params as unknown[])[0] as string;
     if (body.method === "eth_getTransactionReceipt") {
       if (s.receipts[first] === "none") return reply(null);
@@ -184,7 +206,7 @@ const rpcTx = (hash: string, t: SentTx, mined: boolean) => ({
  * itself the standard way (EIP-6963). Each transaction it is asked to send is handed to `onSend`, which returns
  * the hash the wallet answers with. Like a real wallet it remembers that this site was approved.
  */
-async function fakeWallet(page: Page, onSend: (tx: { to: string; data: Hex; from?: string }) => string) {
+async function fakeWallet(page: Page, onSend: (tx: { to: string; data: Hex; from?: string; value?: Hex }) => string) {
   await page.exposeFunction("__walletSend", onSend);
   await page.addInitScript((account) => {
     const approved = () => window.localStorage.getItem("__fakeWalletApproved") === "1";
@@ -351,7 +373,7 @@ test.describe("vault page", () => {
     await out.fill("abc");
     await expect(vault.getByText("Use digits only, like 100 or 0.5.")).toBeVisible();
     // Max fills in exactly what is there.
-    await vault.locator(".vform").nth(1).getByRole("button", { name: "Max" }).click();
+    await page.locator(".vform").filter({ has: page.getByLabel("Withdraw to your wallet") }).getByRole("button", { name: "Max" }).click();
     await expect(out).toHaveValue("150.25");
     await expect(vault.getByText(/It goes to 0x7a3f…c1c2, the wallet you signed in with\./)).toBeVisible();
   });
@@ -393,6 +415,77 @@ test.describe("vault page", () => {
     await expect(vault.getByRole("button", { name: "Stop the claim" })).toBeVisible();
     await expect(vault.getByText(/This vault has been offered to 0x0ffe…0ffe\./i)).toBeVisible();
     await expect(vault.getByRole("button", { name: "Cancel the offer" })).toBeVisible();
+  });
+
+  test("swaps ETH from the wallet into USDG: a quote first, a minimum and a deadline in what the wallet signs", async ({ page }) => {
+    const chain = healthy();
+    const sent: { to: string; data: Hex; value?: Hex }[] = [];
+    await fakeWallet(page, (tx) => (sent.push(tx), hashOf(sent.length)));
+    await mockApi(page);
+    await mockChain(page, chain);
+    await page.goto("/app/vault");
+    const vault = page.locator(".vaultcol");
+    await expect(vault.locator(".vtotal")).toContainText("$250.25");
+    await connectWallet(page);
+
+    const field = vault.getByLabel("Swap ETH to USDG");
+    const swap = vault.getByRole("button", { name: "Swap", exact: true });
+    await expect(vault.getByText("In your wallet: 0.02 ETH. A little is kept for network fees.")).toBeVisible({ timeout: 30_000 });
+    await expect(swap).toBeDisabled();
+
+    // More than the wallet can spare: the fee money is never swapped away.
+    await field.fill("0.02");
+    await expect(vault.getByText("That leaves no ETH for network fees. The most you can swap is 0.0197 ETH.")).toBeVisible();
+    await expect(swap).toBeDisabled();
+    // Max leaves the reserve.
+    await page.locator(".vform").filter({ has: page.getByLabel("Swap ETH to USDG") }).getByRole("button", { name: "Max" }).click();
+    await expect(field).toHaveValue("0.0197");
+
+    // 0.01 ETH at the pool's $1,990: $19.90, and never less than 1% under that.
+    await field.fill("0.01");
+    await expect(vault.getByText("You get about $19.90 of USDG, and no less than $19.70. It arrives in your wallet; deposit it below.")).toBeVisible({ timeout: 30_000 });
+    await expect(swap).toBeEnabled();
+
+    // A pool far under the oracle's $2,000 is not where the market is: no swap is offered.
+    chain.poolUsdgPerEth = 1_900_000_000n;
+    await field.fill("0.011");
+    await expect(vault.getByText("The pool's price is more than 3% under the oracle's right now, so this swap is not offered. Try again later.")).toBeVisible({ timeout: 30_000 });
+    await expect(swap).toBeDisabled();
+    // A pool that cannot quote: nothing is offered either.
+    chain.poolUsdgPerEth = null;
+    await field.fill("0.012");
+    await expect(vault.getByText("No quote right now. Try again in a moment.")).toBeVisible({ timeout: 30_000 });
+    await expect(swap).toBeDisabled();
+    expect(sent).toHaveLength(0);
+
+    // Back to a fair pool. What the wallet is asked to sign is the router's own call, for this wallet, with the
+    // ETH as the transaction's value, a minimum 1% under the quote and a deadline ten minutes away.
+    chain.poolUsdgPerEth = 1_990_000_000n;
+    await field.fill("0.01");
+    await expect(swap).toBeEnabled({ timeout: 30_000 });
+    const before = Math.floor(Date.now() / 1000);
+    await swap.click();
+    await expect(page.locator(".toast")).toHaveText("Swapped. The USDG is in your wallet: deposit it below.", { timeout: 30_000 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to.toLowerCase()).toBe(ROUTER);
+    expect(BigInt(sent[0]!.value!)).toBe(10_000_000_000_000_000n);
+    const outer = decodeFunctionData({ abi: SWAP_ROUTER, data: sent[0]!.data });
+    expect(outer.functionName).toBe("multicall");
+    const [deadline, calls] = outer.args as unknown as [bigint, Hex[]];
+    expect(Number(deadline)).toBeGreaterThanOrEqual(before + 590);
+    expect(Number(deadline)).toBeLessThanOrEqual(before + 700);
+    expect(calls).toHaveLength(1);
+    const inner = decodeFunctionData({ abi: SWAP_ROUTER, data: calls[0]! });
+    expect(inner.functionName).toBe("exactInputSingle");
+    const [q] = inner.args as unknown as [{ tokenIn: string; tokenOut: string; fee: number; recipient: string; amountIn: bigint; amountOutMinimum: bigint; sqrtPriceLimitX96: bigint }];
+    expect(q.tokenIn.toLowerCase()).toBe(WETH);
+    expect(q.tokenOut.toLowerCase()).toBe(USDG.toLowerCase());
+    expect(q.fee).toBe(100);
+    expect(q.recipient.toLowerCase()).toBe(ME);
+    expect(q.amountIn).toBe(10_000_000_000_000_000n);
+    expect(q.amountOutMinimum).toBe(19_701_000n); // $19.90 less 1%
+    expect(q.sqrtPriceLimitX96).toBe(0n);
+    await expect(field).toHaveValue("");
   });
 
   test("with every call to the site's server refused, a returning visitor connects a wallet and withdraws", async ({ page }) => {

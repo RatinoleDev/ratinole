@@ -209,6 +209,11 @@ script stops at anything it does not recognise: a misspelt option, or a word too
   same 24-hour window, stop loss included, however many buys built it. A scheduled buy that would break this
   is made smaller or skipped, and the decision says so (a plan with no exit may use all of the limit). A sale
   larger than what is left is split over the following hours.
+- **Swapping ETH into USDG.** The Vault page lets a wallet that holds only ETH swap it into USDG before
+  depositing. It is the wallet's own swap through Uniswap's router, in the pool the agents use: the site
+  signs nothing. The swap carries a minimum (the quote less 1%) and a 10-minute deadline, is not offered when
+  the pool is more than 3% under the oracle, and always leaves a little ETH for fees. To rehearse it on a
+  fork: `pnpm --filter @rationale/engine exec tsx test/swapCheck.ts`.
 - **Launch checks.** A live agent is not launched when one of its orders would be under $1, or when the
   vault's daily limit cannot hold one order and the sale that follows it (order × 2.2 / 0.98). The message
   says which, with the numbers, and what to change.

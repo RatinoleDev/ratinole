@@ -18,6 +18,8 @@ export interface TxCall {
   abi: Abi;
   functionName: string;
   args: readonly unknown[];
+  /** ETH sent with the call, for the few calls that take it. */
+  value?: bigint;
 }
 
 /**

@@ -5,12 +5,13 @@
  * from the chain, and every change is a transaction the owner signs in their own wallet. The site holds no key.
  * Until live trading is open on this site, the page is a preview of how a vault works.
  */
-import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE, VAULT_ABI, explorerAddress, fromUnits, parseAmount, type ChainConfigDTO } from "@rationale/config";
+import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE, LIVE_TOKENS, VAULT_ABI, explorerAddress, fromUnits, parseAmount, type ChainConfigDTO } from "@rationale/config";
 import { useEffect, useMemo, useState } from "react";
 import { formatUnits, parseUnits, zeroAddress, type Abi, type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { useMode } from "../../../components/app/Mode";
 import { ConnectPanel, useSession } from "../../../components/app/Session";
+import { SwapEth } from "../../../components/app/SwapEth";
 import { shortAddress, usd } from "../../../lib/format";
 import { useTx } from "../../../lib/tx";
 
@@ -479,6 +480,8 @@ function ManageVault({
       <div className="panel">
         <h2>Deposit and withdraw</h2>
         <p className="hint">A deposit moves USDG from your wallet into your vault. A withdrawal sends it back to your wallet, at any time, even while paused.</p>
+        {/* For a wallet that holds ETH and no USDG yet. Its own swap, signed in the wallet. */}
+        <SwapEth owner={owner} off={off || degraded} busy={tx.busy} ethPrice={assets.find((a) => sameAddress(a.address, LIVE_TOKENS.ETH.address))?.price ?? null} send={tx.send} />
         <div className="vform">
           <label htmlFor="v-dep">Deposit USDG</label>
           <div className="vfield">

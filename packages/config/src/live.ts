@@ -22,6 +22,63 @@ export const LIVE_TOKENS: Record<MarketId, LiveToken> = {
   BTC: { symbol: "cbBTC", address: "0xcec185eb182c47d1ba1efc84e6959e18cd620be4", decimals: 8 },
 };
 
+/**
+ * A wallet's own swap of ETH into the stablecoin, offered on the Vault page so that a wallet holding only ETH can
+ * fund its vault. The site never signs it: the wallet does.
+ */
+export const SWAP = {
+  /** Uniswap V3 SwapRouter02 on Robinhood Chain, the router every vault trades through. Its WETH9 is LIVE_TOKENS.ETH. */
+  router: "0xcaf681a66d020601342297493863e78c959e5cb2",
+  /** The ETH/USDG pool the vaults use: 0.01%. */
+  ethFeeTier: 100,
+  /** A swap returns no less than its quote minus this, in percent, or it is refused on-chain. */
+  slippagePct: 1,
+  /** A swap that has not run this long after it was signed is refused on-chain, in seconds. */
+  deadlineSeconds: 600,
+  /** A quote more than this far under the oracle's price is not offered at all, in percent. */
+  maxUnderOraclePct: 3,
+  /** ETH always left in the wallet for network fees. */
+  gasReserveEth: 0.0003,
+} as const;
+
+/** The least a swap quoted at `quote` may return: the quote less SWAP.slippagePct. */
+export const swapMinOut = (quote: bigint): bigint => (quote * BigInt(Math.round((100 - SWAP.slippagePct) * 100))) / 10_000n;
+
+/** The two calls of the router that a wallet's swap uses. */
+export const SWAP_ROUTER_ABI = [
+  {
+    type: "function",
+    name: "exactInputSingle",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "recipient", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" },
+        ],
+      },
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "multicall",
+    stateMutability: "payable",
+    inputs: [
+      { name: "deadline", type: "uint256" },
+      { name: "data", type: "bytes[]" },
+    ],
+    outputs: [{ name: "", type: "bytes[]" }],
+  },
+] as const;
+
 export const LIVE = {
   /** One vault per wallet, and one live agent trading it: two agents would fight over the same money. */
   maxAgentsPerVault: 1,
