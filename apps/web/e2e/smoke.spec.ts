@@ -104,6 +104,9 @@ test("has icons, link previews, robots, sitemap and legal pages", async ({ page,
   // The logo is artwork; the link still carries the name for screen readers.
   await expect(page.getByRole("link", { name: "Ratinole" }).first().locator("svg.bmark")).toBeVisible();
   await expect(page.getByRole("link", { name: "Ratinole on X" })).toHaveAttribute("href", "https://x.com/RatinoleHQ");
+  // The source code is public, and the site links to it from the header and the footer.
+  await expect(page.getByRole("link", { name: "Ratinole source code on GitHub" })).toHaveAttribute("href", "https://github.com/RatinoleDev/ratinole");
+  await expect(page.getByRole("link", { name: "Source code on GitHub", exact: true })).toHaveAttribute("href", "https://github.com/RatinoleDev/ratinole");
   await expect(page.locator('meta[name="twitter:site"]')).toHaveAttribute("content", "@RatinoleHQ");
   await expect(page.locator('link[rel="icon"]').first()).toHaveAttribute("href", /icon|favicon/);
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /^https:\/\/ratinole\.trade\/opengraph-image/);

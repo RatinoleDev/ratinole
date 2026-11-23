@@ -9,5 +9,7 @@ export const BRAND_TAGLINE = "Trading agents that show their reasoning, on Robin
 /** The official X account. */
 export const X_HANDLE = "RatinoleHQ";
 export const X_URL = `https://x.com/${X_HANDLE}`;
+/** The public source code: the app, the engine and the vault contracts. */
+export const GITHUB_URL = "https://github.com/RatinoleDev/ratinole";
 /** Shown on the legal pages. Empty until the owner chooses a public contact address. */
 export const CONTACT_EMAIL = "";
