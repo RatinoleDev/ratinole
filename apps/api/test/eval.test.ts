@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { draftToPlan, intake, ruleDrafter } from "@rationale/brain";
+import { describePlan, draftToPlan, intake, planChecks, ruleDrafter } from "@rationale/brain";
+import { MARKET_IDS, RISK_DEFAULTS, STUDIO_EXAMPLES } from "@rationale/config";
 import { describe, expect, it } from "vitest";
 import { checkCase, type EvalCase } from "../eval/check";
 import { validDraft } from "./helpers";
@@ -47,5 +48,82 @@ describe("intake eval set", () => {
       if (problems.length) failures.push(`${c.id}: ${problems.join("; ")}`);
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe("the example strategies offered in Agent Studio", () => {
+  // The options the API reads a sentence with, for a wallet with the default limits.
+  const api = { supportedMarkets: MARKET_IDS, maxSizePct: RISK_DEFAULTS.maxSizePctOfCash, defaultSizePct: RISK_DEFAULTS.defaultSizePct, defaultStopLossPct: RISK_DEFAULTS.defaultStopLossPct };
+  const rows = async (sentence: string) => {
+    const out = await intake(sentence, ruleDrafter, api);
+    if (!out.ok) throw new Error(`${sentence}: ${out.message}`);
+    return { out, text: describePlan(out.plan).map((r) => `${r.label}: ${r.lines.join(" | ")}`) };
+  };
+
+  it("are each read exactly as written, with nothing filled in for the user", async () => {
+    const read: Record<string, string[]> = {};
+    for (const e of STUDIO_EXAMPLES) {
+      const { out, text } = await rows(e.sentence);
+      // A note means the reader had to assume something (a size, a stop). An example states everything itself.
+      expect(out.notes, e.label).toEqual([]);
+      read[e.label] = text;
+    }
+    expect(read).toEqual({
+      "Trend dip on ETH": [
+        "Market: ETH / USDG",
+        "Buy when: Price is more than 3% under its 20-hour average | The long trend is rising",
+        "Sell when: Take profit at +6% | Stop loss at −4%",
+        "Stands aside: When the market is classed as stressed",
+        "Size per trade: 20% of cash",
+      ],
+      "RSI rebound on BTC": [
+        "Market: BTC / USDG",
+        "Buy when: RSI crosses above 30",
+        "Sell when: Stop loss at −5% | RSI is above 70",
+        "Stands aside: When the market is classed as stressed",
+        "Size per trade: 25% of cash",
+      ],
+      "Drop rebound on ETH": [
+        "Market: ETH / USDG",
+        "Buy when: RSI is below 35 | Price fell more than 5% in the last 24 hours",
+        "Sell when: Stop loss at −5% | Price crosses back above its 20-hour average",
+        "Stands aside: When the market is classed as stressed",
+        "Size per trade: 20% of cash",
+      ],
+      "Momentum on ETH": [
+        "Market: ETH / USDG",
+        "Buy when: Volume is above 1.5× its 24-hour average | Price rose more than 3% in the last 24 hours",
+        "Sell when: Trailing stop 4% under the high since buying",
+        "Stands aside: When the market is classed as stressed",
+        "Size per trade: 20% of cash",
+      ],
+      "Uptrend pullback on BTC": [
+        "Market: BTC / USDG",
+        "Buy when: RSI is below 45 | The long trend is rising",
+        "Sell when: Take profit at +5% | Trailing stop 3% under the high since buying",
+        "Stands aside: When the market is classed as stressed",
+        "Size per trade: 20% of cash",
+      ],
+      "Weekly ETH buyer": ["Market: ETH / USDG", "Buy when: Buys every week", "Sell when: Stop loss at −15%", "Stands aside: When the market is classed as stressed", "Size per trade: 10% of cash"],
+    });
+  });
+
+  it("each pass every row of the plan check, and none needs a feed that can be missing", async () => {
+    for (const e of STUDIO_EXAMPLES) {
+      const { out } = await rows(e.sentence);
+      if (!out.ok) continue;
+      expect(planChecks(out.plan, api.maxSizePct).filter((c) => !c.pass), e.label).toEqual([]);
+      const signals = [...out.plan.entry, ...(out.plan.exit.conditions ?? [])].map((c) => c.signal);
+      expect(signals, e.label).not.toContain("funding_rate");
+    }
+  });
+
+  it("have short, distinct labels and fit the sentence box", () => {
+    const labels = STUDIO_EXAMPLES.map((e) => e.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    for (const e of STUDIO_EXAMPLES) {
+      expect(e.label.length, e.label).toBeLessThanOrEqual(26);
+      expect(e.sentence.length, e.label).toBeLessThanOrEqual(240);
+    }
   });
 });

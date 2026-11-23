@@ -65,6 +65,40 @@ export const BACKTEST = {
 } as const;
 
 /**
+ * The example strategies offered in Agent Studio. Each is a complete strategy: a buy rule, a way out with a loss
+ * limit, a reason to stand aside and a size, so every row of the plan check passes. Each is read exactly as
+ * written by the built-in reader (a test pins the reading), and uses only signals that are always available:
+ * none depends on the funding feed. They are starting points to edit, not recommendations to trade.
+ */
+export const STUDIO_EXAMPLES: readonly { label: string; sentence: string }[] = [
+  {
+    label: "Trend dip on ETH",
+    sentence: "Buy ETH on a 3% dip under its 20-hour average while the long trend is rising, stay out when the market is stressed, take profit at 6%, stop at 4%, use 20% per trade",
+  },
+  {
+    label: "RSI rebound on BTC",
+    sentence: "Buy BTC when RSI crosses back above 30, sell when RSI goes above 70, stay out when the market is stressed, stop at 5%, use 25% per trade",
+  },
+  {
+    label: "Drop rebound on ETH",
+    sentence:
+      "Buy ETH when price falls more than 5% in the last 24 hours and RSI is below 35, sell when price crosses back above its 20-hour average, stay out when the market is stressed, stop at 5%, use 20% per trade",
+  },
+  {
+    label: "Momentum on ETH",
+    sentence: "Buy ETH when price rises more than 3% in the last 24 hours and volume is above 1.5x its average, stay out when the market is stressed, trailing stop 4%, use 20% per trade",
+  },
+  {
+    label: "Uptrend pullback on BTC",
+    sentence: "Buy BTC when the long trend is rising and RSI is below 45, stay out when the market is stressed, take profit at 5%, trailing stop 3%, use 20% per trade",
+  },
+  {
+    label: "Weekly ETH buyer",
+    sentence: "Buy ETH with 10% of cash every week, stay out when the market is stressed, stop at 15%",
+  },
+];
+
+/**
  * The strategy shown in the landing page's product preview. The plan is our own
  * translation of the sentence, written by hand; its backtest runs on real
  * candles in the engine and is stored like any other backtest.

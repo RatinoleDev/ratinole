@@ -1,10 +1,10 @@
 "use client";
 
-import type { AgentDTO, BacktestDTO, IntakeResponse } from "@rationale/config";
+import { STUDIO_EXAMPLES, type AgentDTO, type BacktestDTO, type IntakeResponse } from "@rationale/config";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Chart, splitIndexOf } from "../../../components/Chart";
 import { PlanRows } from "../../../components/PlanRow";
 import { useToast } from "../../../components/Toast";
@@ -22,17 +22,6 @@ const STEPS = ["Describe", "Check the reading", "Backtest", "Launch"];
 const DEFAULT_SENTENCE =
   "Buy ETH when RSI drops below 30 in an uptrend, stay out when the market is stressed, take profit at 8% and stop at 4%, use 25% per trade";
 
-const CHIPS = [
-  {
-    label: "Dip buyer on ETH",
-    text: "Buy ETH on a 3% dip under its 20-hour average while the long trend is rising, take profit at 6%, stop at 4%, use 20% per trade",
-  },
-  {
-    label: "RSI bounce on BTC",
-    text: "Buy BTC when RSI crosses back above 30, sell when RSI goes above 70, stop at 5%, use 25% per trade",
-  },
-  { label: "Weekly ETH buyer", text: "Buy ETH with 10% of cash every week, stop at 15%" },
-];
 
 type IntakeState =
   | { kind: "idle" }
@@ -46,6 +35,20 @@ export default function StudioPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [sentence, setSentence] = useState(DEFAULT_SENTENCE);
+  // The box is as tall as its sentence, so a strategy is always read whole, never with its last line cut off.
+  // It is fitted again when the sentence changes and when the window does (a phone turned on its side).
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const fit = () => {
+      const el = box.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight + 2}px`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [sentence]);
   const [intake, setIntake] = useState<IntakeState>({ kind: "idle" });
   const [backtestId, setBacktestId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -203,6 +206,7 @@ export default function StudioPage() {
           </p>
           <div className="tawrap">
             <textarea
+              ref={box}
               aria-label="Strategy description"
               value={sentence}
               onChange={(e) => setSentence(e.target.value)}
@@ -212,14 +216,15 @@ export default function StudioPage() {
               {sentence.length} / {MAX_SENTENCE}
             </span>
           </div>
-          <div className="chips">
-            {CHIPS.map((c) => (
+          <div className="chips" role="group" aria-label="Example strategies">
+            {STUDIO_EXAMPLES.map((c) => (
               <button
                 key={c.label}
                 className="chip"
+                title={c.sentence}
                 onClick={() => {
-                  setSentence(c.text);
-                  void understand(c.text);
+                  setSentence(c.sentence);
+                  void understand(c.sentence);
                 }}
               >
                 {c.label}
