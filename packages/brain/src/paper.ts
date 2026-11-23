@@ -16,18 +16,25 @@ export interface PositionState {
   dayStartEquity: number;
   /**
    * Open time (ms) of the newest candle whose close the trailing-stop high has taken in. After hours the agent
-   * could not read (stale data, or the engine was down) every close since this one is looked at, so the high is
-   * never missed. Null or absent when flat, and on positions opened before this was kept.
+   * could not read (stale data, or the engine was down) every close since this one is looked at, as far back as
+   * the prices loaded for the decision reach (about a month). Null or absent when flat, and on positions opened
+   * before this was kept.
    */
   peakSeenTo?: number | null;
   /**
-   * An exit that was reached and whose sale did not complete: the order was refused or late, or the vault's daily
-   * limit let only part of the position go. While this is set the agent sells in every hour it can, whether or not
-   * the exit still holds, the way a triggered stop stays triggered. Cleared when the position is closed. Paper
-   * sales always complete, so this is only ever set for live agents.
+   * A stop or an exit rule that was reached and whose sale did not complete: the order was refused or late, or
+   * the vault's daily limit let only part of the position go. While this is open the agent sells in every hour
+   * it can, whether or not the exit still holds, the way a stop that was hit stays an order to sell. It lapses
+   * after OPEN_EXIT_HOURS, and is cleared when the position is closed. A take profit is never kept open: it
+   * only ever sells while its target is reached. Paper sales always complete, so this is only set for live agents.
    */
   exitPending?: ExitPending | null;
 }
+
+/** How long an exit whose sale did not complete stays an order to sell. After that the exits are checked afresh. */
+export const OPEN_EXIT_HOURS = 48;
+/** A take profit sells at its target or above, never below. The other exits, once reached, stay orders to sell. */
+export const staysOpen = (kind: ExitKind): boolean => kind !== "take profit";
 
 export type ExitKind = "take profit" | "stop loss" | "trailing stop" | "exit rule";
 export interface ExitPending {

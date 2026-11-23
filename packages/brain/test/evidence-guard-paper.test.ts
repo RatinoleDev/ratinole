@@ -75,9 +75,16 @@ describe("runGuard", () => {
     expect(loss(0.04)).toBe("Flat today. Your cap is a 3% daily loss.");
     expect(loss(0)).toBe("Flat today. Your cap is a 3% daily loss.");
     expect(loss(1.26)).toBe("Up 1.3% today. Your cap is a 3% daily loss.");
-    // At the cap to one decimal it is "at", not "past".
-    expect(loss(-3.04)).toBe("Down 3.0% today, at your 3% cap. No new buys until the next UTC day.");
     expect(loss(-3.2)).toBe("Down 3.2% today, past your 3% cap. No new buys until the next UTC day.");
+  });
+  it("right at the cap, never prints a figure that contradicts its own verdict", () => {
+    const loss = (dailyPnlPct: number) => runGuard({ ...base, dailyPnlPct })[2]!;
+    // One decimal would read "down 3.0%, under your 3% cap" and "down 3.0%, past your 3% cap".
+    expect(loss(-2.96)).toMatchObject({ pass: true, detail: "Down 2.96% today, under your 3% cap." });
+    expect(loss(-3.04)).toMatchObject({ pass: false, detail: "Down 3.04% today, past your 3% cap. No new buys until the next UTC day." });
+    expect(loss(-3)).toMatchObject({ pass: false, detail: "Down 3.0% today, at your 3% cap. No new buys until the next UTC day." });
+    expect(loss(-2.999)).toMatchObject({ pass: true, detail: "Down just under 3% today, under your 3% cap." });
+    expect(loss(-3.001)).toMatchObject({ pass: false, detail: "Down just over 3% today, past your 3% cap. No new buys until the next UTC day." });
   });
   it("only checks market stress when the plan asks for it", () => {
     expect(runGuard({ ...base, standsAsideWhenStressed: false, regime: "stressed" }).some((c) => c.check === "Market stress")).toBe(false);

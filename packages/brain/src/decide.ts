@@ -18,7 +18,7 @@ import {
 } from "./evidence";
 import { explain, usd, type Situation } from "./explain";
 import { runGuard, vetoes } from "./guard";
-import { applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, type ExitKind, type Fill, type LiveFill, type PositionState } from "./paper";
+import { OPEN_EXIT_HOURS, applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, staysOpen, type ExitKind, type Fill, type LiveFill, type PositionState } from "./paper";
 import { classifyRegime, type RegimeParams } from "./regime";
 import { SeriesSource, formatSignalValue, type SignalId } from "./signals";
 import { HOUR_MS, type Action, type Candle, type Decision, type EvidenceItem, type Filter, type GuardCheck, type Plan } from "./types";
@@ -72,6 +72,8 @@ export interface StepOutput {
   /** Equity after any fill, marked at the fill price (or the last close). */
   equity: number;
   markPrice: number;
+  /** Which exit asked for a sale this hour, whether or not it went through. Null when none did. */
+  exitKind: ExitKind | null;
 }
 
 const NOT_CHECKED_SHORT: Partial<Record<Filter, string>> = {
@@ -167,10 +169,15 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     // The high since buying takes in every close the agent has not looked at yet. Hour after hour that is this
     // hour's alone. After hours it could not read (stale data, or the engine was down) it is every close since,
     // so a high made in those hours still counts for the trailing stop.
-    let peak = Math.max(state.peak ?? close, close);
+    // A close that came before the buy never counts, also when this hour's data is old and the newest candle
+    // there is closed before the position was opened.
     const seen = state.peakSeenTo;
-    if (seen != null) for (let j = i - 1; j >= 0 && src.candles[j]!.t > seen; j--) peak = Math.max(peak, src.candles[j]!.c);
+    let peak = state.peak ?? close;
+    if (seen == null) peak = Math.max(peak, close);
+    else for (let j = i; j >= 0 && src.candles[j]!.t > seen; j--) peak = Math.max(peak, src.candles[j]!.c);
     state = { ...state, peak, peakSeenTo: Math.max(seen ?? candle.t, candle.t) };
+    // An exit left open too long ago lapses: from here on the exits are checked against today's prices again.
+    if (state.exitPending && hour - state.exitPending.since > OPEN_EXIT_HOURS * HOUR_MS) state = { ...state, exitPending: null };
   }
 
   const reading = classifyRegime(src, i, ctx.regimeParams);
@@ -209,6 +216,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
   let guard: GuardCheck[];
   let fill: Fill | null = null;
   let situation: Situation;
+  let exitKind: ExitKind | null = null;
 
   const tryBuy = (): void => {
     const ruleItems = entry.map((r) => r.item);
@@ -218,7 +226,9 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     const wants = plan.kind === "dca" ? dcaDue && allEntryHold : allEntryHold && buyConf >= ctx.params.confidenceThreshold;
     confidence = 100 - buyConf;
     if (!fresh.ok) {
-      situation = { type: "stale", detail: fresh.detail, inPosition: state.qty > 0 };
+      // With a position open its exits were checked this hour unless the prices themselves are old: a short
+      // history stops a buy only.
+      situation = { type: "stale", detail: fresh.detail, inPosition: state.qty > 0 && !freshForExit.ok };
       return;
     }
     if (!wants) {
@@ -304,11 +314,15 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     if (!freshForExit.ok) {
       situation = { type: "stale", detail: freshForExit.detail, inPosition: true };
     } else if (reason && kind) {
+      exitKind = kind;
+      // A stop or an exit rule that was reached stays an order to sell. A take profit does not: it sells at its
+      // target or above, so it is simply checked again next hour.
+      const open = staysOpen(kind);
       const live = inp.liveFill;
       if (live && !live.ok) {
-        // Nothing was sold. The exit stays open, and the agent sells in the first hour it can.
-        state = { ...state, exitPending: pending ?? { since: hour, kind } };
-        situation = { type: "not_sold", reason, why: live.reason, stillTrying };
+        // Nothing was sold.
+        if (open) state = { ...state, exitPending: pending ?? { since: hour, kind } };
+        situation = { type: "not_sold", reason, why: live.reason, stillTrying, retry: open };
       } else {
         if (live && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
         // A sale of part of the position is measured against the cost of that part.
@@ -318,12 +332,12 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
         if (res) {
           const realizedPct = ((res.fill.notional - res.fill.fee) / costBasis - 1) * 100;
           state = res.state;
-          // Only part of it could be sold: the rest is sold in the first hour it can be.
-          if (state.qty > 0) state = { ...state, exitPending: pending ?? { since: hour, kind } };
+          // Only part of it could be sold.
+          if (state.qty > 0 && open) state = { ...state, exitPending: pending ?? { since: hour, kind } };
           fill = res.fill;
           action = "sell";
           confidence = sellConf;
-          situation = { type: "exited", reason, fill: res.fill, realizedPct, leftQty: state.qty > 0 ? state.qty : undefined, note: live?.note };
+          situation = { type: "exited", reason, fill: res.fill, realizedPct, rest: state.qty > 0 ? { qty: state.qty, retry: open } : undefined, note: live?.note };
         }
       }
     } else if (dcaDue && allEntryHold) {
@@ -347,7 +361,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
         ? ""
         : explain({ action, confidence: confidence!, market, kind: plan.kind, situation: situation!, notChecked }),
   };
-  return { decision, fill, state, equity, markPrice: mark };
+  return { decision, fill, state, equity, markPrice: mark, exitKind };
 }
 
 /** Decide from raw candles. Uses only candles that closed at or before `hour`. */

@@ -121,11 +121,18 @@ at the moment of the order, and a swap the vault's oracle disagrees with is refu
 - **Exits are checked once an hour, on the hourly close.** A stop is not a resting
   order: a price that falls through it and comes back inside the hour is not seen, and
   a fall straight through it is sold at the price of the next hour, not at the stop.
-- **An exit that is open stays open until it is sold or the agent is resumed.** If the
-  vault is paused on-chain for a week with a stop reached, the position is sold in the
-  first hour after it is unpaused, whatever the price is then.
-- **A position built by several scheduled buys** can be larger than the daily limit
-  has room for. Its exit is then sold over more than one 24-hour window.
+- **A stop that was reached stays an order to sell for up to 48 hours.** If the vault
+  is paused on-chain with a stop reached and unpaused a day later, the position is sold
+  in the first hour after, whatever the price is then. Tokens the owner adds meanwhile
+  are part of the position and are sold with it. After 48 hours, or when the agent is
+  paused and resumed, the stop is checked afresh. A take profit is never kept open.
+- **Closes the agent never looked at** (the engine was down, or no feed was current)
+  count for the high a trailing stop follows, but a stop that was breached only at such
+  a close, and not at the one the agent sees when it is back, is not acted on.
+- **A plan that buys on a schedule and has an exit** stops adding to its position once
+  the position is as large as the vault's daily limit can still sell. Raising the limit
+  lets it go on. A position that outgrew the limit some other way (the price rose a
+  lot, or the owner lowered the limit) is sold over more than one 24-hour window.
 - **Tokens the owner adds to a position** are counted as bought at that hour's price
   (the average entry moves), but the high the trailing stop follows does not: it stays
   the high since the agent's own buy.

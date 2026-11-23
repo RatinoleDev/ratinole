@@ -294,7 +294,7 @@ test.describe("vault page", () => {
     await expect(page.getByRole("button", { name: "Create my vault" })).toBeVisible();
     await expect(page.getByText("Daily trading limit $500")).toBeVisible();
     // The limit counts buys and sales together, and the page says what that means for one buy.
-    await expect(page.getByText(/Buys and sales both count towards it\. An agent that has an exit rule keeps each buy under \$227, so that it can always sell what it bought on the same day\./)).toBeVisible();
+    await expect(page.getByText(/Buys and sales both count towards it\. An agent that has an exit rule never holds more than it could sell in one day: with nothing held, its largest buy is \$222\./)).toBeVisible();
   });
 
   test("a token the oracle has no price for is left out of the total, and said so", async ({ page }) => {

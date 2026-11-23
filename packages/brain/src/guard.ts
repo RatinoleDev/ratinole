@@ -34,13 +34,18 @@ export function runGuard(g: GuardInput): GuardCheck[] {
 
     const lossOk = g.dailyPnlPct > -g.dailyLossCapPct;
     // Shown to one decimal. A change that rounds to nothing is "flat", never "down 0.0%".
-    const shown = Math.round(Math.abs(g.dailyPnlPct) * 10) / 10;
-    const amount = `${shown.toFixed(1)}%`;
+    const abs = Math.abs(g.dailyPnlPct);
+    const shown = Math.round(abs * 10) / 10;
+    // Right at the cap one decimal cannot tell the two sides apart ("down 3.0%, under your 3% cap"), so a second
+    // is shown; closer than that, the words say which side it is on.
+    const atCap = shown === g.dailyLossCapPct && abs !== g.dailyLossCapPct;
+    const two = Number(abs.toFixed(2));
+    const amount = !atCap ? `${shown.toFixed(1)}%` : two !== g.dailyLossCapPct ? `${abs.toFixed(2)}%` : lossOk ? `just under ${g.dailyLossCapPct}%` : `just over ${g.dailyLossCapPct}%`;
     checks.push({
       check: "Daily loss",
       pass: lossOk,
       detail: !lossOk
-        ? `Down ${amount} today, ${shown > g.dailyLossCapPct ? "past" : "at"} your ${g.dailyLossCapPct}% cap. No new buys until the next UTC day.`
+        ? `Down ${amount} today, ${abs > g.dailyLossCapPct ? "past" : "at"} your ${g.dailyLossCapPct}% cap. No new buys until the next UTC day.`
         : shown === 0
           ? `Flat today. Your cap is a ${g.dailyLossCapPct}% daily loss.`
           : g.dailyPnlPct < 0

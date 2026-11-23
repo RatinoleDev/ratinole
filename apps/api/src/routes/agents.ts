@@ -210,16 +210,19 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
       }
       // The vault's daily limit counts buys and sales together. If one order and the sale that follows it do not
       // both fit, the agent could buy and then be unable to sell that day, stop loss included.
+      // The same arithmetic the engine uses for every buy, so a launch that passes is never trimmed by it at
+      // once. Compared to the cent: "100 × 2.2" is not exactly 220 in floating point.
       const sells = hasExit(plan);
-      const need = order * (sells ? LIVE.exitRoomFactor : 1);
-      if (vault.dailyLimitUsd < need) {
+      const need = Math.round(((order * (sells ? LIVE.exitRoomFactor : 1)) / LIVE.limitMargin) * 100) / 100;
+      if (vault.dailyLimitUsd + 0.005 < need) {
+        const least = usd(Math.ceil(need - 0.005));
         return sendError(
           reply,
           409,
           "limit_too_small",
           sells
-            ? `One order of this agent is about ${usd(order)}, and your vault's daily trading limit is ${usd(vault.dailyLimitUsd)}. The limit counts buys and sales together, so it has to cover a buy and the sale that follows: at least ${usd(Math.ceil(need))}. Raise it on the Vault page, or use a smaller size per trade.`
-            : `One order of this agent is about ${usd(order)}, over your vault's daily trading limit of ${usd(vault.dailyLimitUsd)}. Raise the limit on the Vault page, or use a smaller size per trade.`,
+            ? `One order of this agent is about ${usd(order)}, and your vault's daily trading limit is ${usd(vault.dailyLimitUsd)}. The limit counts buys and sales together, so it has to cover a buy and the sale that follows, with a small margin: at least ${least}. Raise it on the Vault page, or use a smaller size per trade.`
+            : `One order of this agent is about ${usd(order)}, and your vault's daily trading limit is ${usd(vault.dailyLimitUsd)}. With a small margin it has to be at least ${least}. Raise it on the Vault page, or use a smaller size per trade.`,
         );
       }
     }
@@ -312,16 +315,18 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         if (!vault.ok) return sendError(reply, vault.status, vault.error, vault.message);
         await settleTokensTakenOutWhileStopped(a, vault);
       }
-      await deps.prisma.agent.update({
-        where: { id: a.id },
-        // Resuming owes decisions from the next hour; paused hours are never backfilled.
-        data: body.data.status === "active" ? { status: "active", pausedReason: null, owedFrom: new Date(nextHour(now())) } : { status: "paused", pausedReason: null },
-      });
-      // An exit left open by a sale that did not complete belongs to the run that was stopped. Resuming starts
-      // the exits afresh: each is checked again against the prices of the hour the agent comes back.
-      if (body.data.status === "active" && a.mode === "live") {
-        await deps.prisma.agentState.updateMany({ where: { agentId: a.id }, data: { exitPendingSince: null, exitPendingKind: null } });
-      }
+      const resumingLive = body.data.status === "active" && a.mode === "live";
+      await deps.prisma.$transaction([
+        deps.prisma.agent.update({
+          where: { id: a.id },
+          // Resuming owes decisions from the next hour; paused hours are never backfilled.
+          data: body.data.status === "active" ? { status: "active", pausedReason: null, owedFrom: new Date(nextHour(now())) } : { status: "paused", pausedReason: null },
+        }),
+        // An exit left open by a sale that did not complete belongs to the run that was stopped. Resuming starts
+        // the exits afresh: each is checked again against the prices of the hour the agent comes back. Done with
+        // the resume itself, so the engine never sees one without the other.
+        ...(resumingLive ? [deps.prisma.agentState.updateMany({ where: { agentId: a.id }, data: { exitPendingSince: null, exitPendingKind: null } })] : []),
+      ]);
     }
     return (await loadAgentDTO(a.id))!.dto;
   });

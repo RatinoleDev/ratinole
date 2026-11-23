@@ -22,6 +22,7 @@ import {
   requiredWarmup,
   settleBuy,
   settleSell,
+  staysOpen,
   usd,
   type AgentParams,
   type Candle,
@@ -36,13 +37,11 @@ import type { Hex } from "viem";
 import { log } from "../log";
 import { loadCandles } from "../market/candles";
 import { attachFunding, loadFunding } from "../market/funding";
-import { FreshDataPendingError, LATE_AFTER_MS, WAIT_FOR_CANDLE_MS, stateRow, toState, type AgentRunResult, type EngineDeps } from "../runAgent";
+import { FreshDataPendingError, LATE_AFTER_MS, WAIT_FOR_CANDLE_MS, isExitKind, stateRow, toState, type AgentRunResult, type EngineDeps } from "../runAgent";
 import { OrderPendingError, type SwapOutcome, type SwapRequest, type VaultChain } from "./chain";
 
 /** A vault worth less than this is empty. */
 const EMPTY_USD = 1;
-/** Orders stay this far inside the vault's remaining daily limit: the vault values them with its own oracle. */
-const LIMIT_MARGIN = 0.98;
 /** A move of less than this between two decisions is rounding, not a deposit or a withdrawal. */
 const FLOW_MIN_USD = 0.01;
 /**
@@ -299,7 +298,8 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     // Tokens the owner adds do not move the high the trailing stop follows: it stays the high since the agent's
     // own buy. A position the agent finds (it had none) starts its high at this hour's price.
     peak: qty === 0 ? null : before.qty === 0 ? mark : before.peak,
-    peakSeenTo: qty === 0 ? null : before.qty === 0 ? lastCandle.t : before.peakSeenTo,
+    // A position found now starts looking with the next close, also when this hour's prices are old.
+    peakSeenTo: qty === 0 ? null : before.qty === 0 ? hour - HOUR_MS : before.peakSeenTo,
     // An open exit belongs to the position. With no position left there is nothing to sell.
     exitPending: qty === 0 ? null : before.exitPending,
     dayStartEquity: before.dayStartEquity * scale,
@@ -322,17 +322,19 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     if (still?.status !== "active") return skip(still?.status ?? "not found");
     const buying = want.fill.side === "buy";
     const least = LIVE.minOrderUsd;
-    const room = snap.remainingUsd * LIMIT_MARGIN;
+    const room = snap.remainingUsd * LIVE.limitMargin;
     const limitUsedUp = "the vault's daily trading limit is used up";
     let amountIn = 0n;
     if (clock() - hour > LIVE.orderWindowMs) {
       outcome = { ok: false, reason: LATE };
     } else if (buying) {
-      // The limit counts buys and sales together. A buy leaves room in it for the sale of what it bought, so a
-      // position can always be sold in the window it was bought in, stop loss included. A plan with no exit never
-      // sells, and may use all the room there is.
+      // The limit counts buys and sales together. After a buy there must still be room in it to sell everything
+      // the vault then holds of the token (what it already held and what this buy adds), valued 20% higher. So
+      // the position can always be sold in the window it was bought in, stop loss included, however many buys
+      // built it. A plan with no exit never sells, and may use all the room there is.
       const sells = hasExit(plan);
-      const buyRoom = sells ? room / LIVE.exitRoomFactor : room;
+      const heldUsd = fromUnits(snap.token, token.decimals) * (snap.priceUsd ?? mark);
+      const buyRoom = sells ? (room - (LIVE.exitRoomFactor - 1) * heldUsd) / LIVE.exitRoomFactor : room;
       const dollars = Math.min(want.fill.notional, buyRoom, fromUnits(snap.stable, LIVE_STABLE.decimals));
       if (room < least) outcome = { ok: false, reason: limitUsedUp };
       else if (buyRoom < least) outcome = { ok: false, reason: "the vault's daily trading limit has too little left for a buy and the sale that would follow it" };
@@ -358,7 +360,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
         else {
           const part = toUnits(sellUsd / price, token.decimals);
           amountIn = part < snap.token ? part : snap.token;
-          note = "The vault's daily trading limit allowed only part of the position to be sold. The agent tries to sell the rest every hour.";
+          note = "The vault's daily trading limit allowed only part of the position to be sold.";
         }
       }
       if (!outcome && amountIn <= 0n) outcome = { ok: false, reason: "there was nothing to trade" };
@@ -375,7 +377,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
       const fromBlock = await chain.blockNumber();
       order = await prisma.liveOrder.create({
         // Stamped with the engine's own clock, the one every later check of this order's age uses.
-        data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString(), note: note ?? null, createdAt: new Date(now) },
+        data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString(), note: note ?? null, exitKind: buying ? null : want.exitKind, createdAt: new Date(now) },
       });
       const orderId = order.id;
       try {
@@ -398,6 +400,12 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
           // The chain could not be reached before anything was signed. Nothing happened: take the unsigned order
           // back, and let the retry place it afresh.
           await prisma.liveOrder.deleteMany({ where: { id: orderId, status: "pending", txHash: null } });
+          // If every retry of this hour ends here, the hour has no decision to carry what the agent wanted. A stop
+          // or an exit rule that was reached is therefore put on the record now: next hour it is still an order
+          // to sell, whatever the price has done.
+          if (!buying && want.exitKind && staysOpen(want.exitKind)) {
+            await prisma.agentState.updateMany({ where: { agentId, exitPendingSince: null }, data: { exitPendingSince: new Date(hour), exitPendingKind: want.exitKind } });
+          }
           throw err;
         }
       }
@@ -429,22 +437,39 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     const res = liveFill.side === "buy" ? settleBuy(state, liveFill, hour) : settleSell(state, liveFill);
     if (!res) throw new Error(`Agent ${agentId}: order ${order?.id} has no amounts to book`);
     let booked = res.state;
-    // A buy starts the trailing-stop high at its own price. A sale that left part of the position was an exit:
-    // the rest is still to be sold.
-    if (liveFill.side === "buy") booked = { ...booked, peakSeenTo: lastCandle.t };
-    else if (booked.qty > 0) booked = { ...booked, exitPending: state.exitPending ?? { since: hour, kind: "exit rule" } };
+    let tail = "";
+    if (liveFill.side === "buy") {
+      // A buy starts the trailing-stop high at its own price.
+      booked = { ...booked, peakSeenTo: hour - HOUR_MS };
+      if (note) tail = ` ${note}`;
+    } else if (booked.qty > 0) {
+      // Tokens are left after the sale. Either the sale was cut short (it sold less than the position on record),
+      // or it sold all of it and what is here now came into the vault afterwards.
+      const kind = isExitKind(order?.exitKind) ? order.exitKind : null;
+      if (liveFill.qty < before.qty * (1 - 1e-9)) {
+        // Cut short. The exit that asked for the sale decides what happens to the rest, as in any other hour.
+        const open = kind != null && staysOpen(kind);
+        if (open) booked = { ...booked, exitPending: state.exitPending ?? { since: hour, kind } };
+        tail = ` ${qtyText(booked.qty)} ${agent.market} is still held.${note ? ` ${note}` : ""}${open ? " The agent tries to sell the rest every hour." : kind === "take profit" ? " The rest is sold in the next hour the target is still reached." : ""}`;
+      } else {
+        // The whole position was sold. What the vault holds now is not the rest of it: the owner added it since.
+        // It is a new position, counted as bought at this hour's price, with no exit open.
+        booked = { ...booked, avgEntry: mark, peak: mark, peakSeenTo: hour - HOUR_MS, exitPending: null };
+        tail = ` ${qtyText(booked.qty)} ${agent.market} that came into the vault since is now held.`;
+      }
+    }
     const what = liveFill.side === "buy" ? `Bought ${usd(res.fill.notional)} of ${agent.market} at ${usd(res.fill.price)}` : `Sold ${qtyText(res.fill.qty)} ${agent.market} at ${usd(res.fill.price)}`;
-    const left = liveFill.side === "sell" && booked.qty > 0 ? ` ${qtyText(booked.qty)} ${agent.market} is still held.` : "";
     out = {
       decision: {
         ...want.decision,
         action: liveFill.side,
-        explanation: `${liveFill.side === "buy" ? "Buy" : "Sell"}. This order was placed earlier in the hour by a run that was interrupted before it could write down its reasons. The readings shown with it were taken afterwards. ${what}.${left}${note ? ` ${note}` : ""}`,
+        explanation: `${liveFill.side === "buy" ? "Buy" : "Sell"}. This order was placed earlier in the hour by a run that was interrupted before it could write down its reasons. The readings shown with it were taken afterwards. ${what}.${tail}`,
       },
       fill: res.fill,
       state: booked,
       equity: equityOf(booked, mark),
       markPrice: mark,
+      exitKind: null,
     };
     log("warn", "live order booked without its reasons", { agentId, orderId: order?.id, hour: new Date(hour).toISOString() });
   } else {

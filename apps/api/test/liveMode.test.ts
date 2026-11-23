@@ -552,10 +552,23 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect(res.json()).toMatchObject({
       error: "limit_too_small",
       message:
-        "One order of this agent is about $20.00, and your vault's daily trading limit is $40.00. The limit counts buys and sales together, so it has to cover a buy and the sale that follows: at least $44.00. Raise it on the Vault page, or use a smaller size per trade.",
+        "One order of this agent is about $20.00, and your vault's daily trading limit is $40.00. The limit counts buys and sales together, so it has to cover a buy and the sale that follows, with a small margin: at least $45.00. Raise it on the Vault page, or use a smaller size per trade.",
     });
     expect(await prisma.agent.count()).toBe(0);
+    // The figure in the message is the one that is accepted: the engine then places the full $20 order.
     s.vault.info.dailyLimitUsd = 44;
+    expect((await s.launch()).json()).toMatchObject({ error: "limit_too_small" });
+    s.vault.info.dailyLimitUsd = 45;
+    expect((await s.launch()).statusCode).toBe(201);
+  });
+
+  it("checks the daily limit to the cent, not to the last binary digit", async () => {
+    const s = await withVault();
+    // $490 at 20% is a $98 order: 98 × 2.2 / 0.98 is $220 exactly, and not exactly 220 in floating point.
+    s.vault.info.cash = 490;
+    s.vault.info.dailyLimitUsd = 219.99;
+    expect((await s.launch()).json()).toMatchObject({ error: "limit_too_small", message: expect.stringMatching(/at least \$220\.00\. Raise it/) });
+    s.vault.info.dailyLimitUsd = 220;
     expect((await s.launch()).statusCode).toBe(201);
   });
 
@@ -563,8 +576,11 @@ describe.skipIf(!hasDb)("live mode", () => {
     const s = await withVault();
     await prisma.backtest.update({ where: { id: s.bt.id }, data: { plan: { markets: ["ETH"], kind: "dca", entry: [], cadenceHours: 168, exit: {}, filters: [], sizePctOfCash: 20 } } });
     s.vault.info.dailyLimitUsd = 15;
-    expect((await s.launch()).json()).toMatchObject({ error: "limit_too_small", message: expect.stringMatching(/^One order of this agent is about \$20\.00, over your vault's daily trading limit of \$15\.00\./) });
-    s.vault.info.dailyLimitUsd = 20;
+    expect((await s.launch()).json()).toMatchObject({
+      error: "limit_too_small",
+      message: "One order of this agent is about $20.00, and your vault's daily trading limit is $15.00. With a small margin it has to be at least $21.00. Raise it on the Vault page, or use a smaller size per trade.",
+    });
+    s.vault.info.dailyLimitUsd = 21;
     expect((await s.launch()).statusCode).toBe(201);
   });
 

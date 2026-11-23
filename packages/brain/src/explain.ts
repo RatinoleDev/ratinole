@@ -44,17 +44,18 @@ export type Situation =
       reason: string;
       fill: Fill;
       realizedPct: number;
-      /** Tokens still in the position after a sale of part of it. */
-      leftQty?: number;
+      /** After a sale of part of the position: what is still held, and whether the agent keeps trying to sell it. */
+      rest?: { qty: number; retry: boolean };
       note?: string;
     }
   /** Live trading only: the agent wanted to buy, and nothing was bought. */
   | { type: "not_bought"; confidence: number; why: string; scheduledDue?: boolean }
   /**
-   * Live trading only: an exit was reached and the position was not sold. It stays open, and the agent tries again
-   * every hour. `stillTrying` is set when this hour was itself such a retry.
+   * Live trading only: an exit was reached and the position was not sold. `retry`: the exit stays an order to
+   * sell, and the agent tries again every hour (a take profit instead waits for its target to be reached again).
+   * `stillTrying` is set when this hour was itself such a retry.
    */
-  | { type: "not_sold"; reason: string; why: string; stillTrying?: string };
+  | { type: "not_sold"; reason: string; why: string; stillTrying?: string; retry: boolean };
 
 export interface ExplainInput {
   action: Action;
@@ -131,7 +132,8 @@ export function explain(x: ExplainInput): string {
     case "waiting": {
       const met = s.total - s.unmet.length;
       if (s.scheduledDue) {
-        text = `Hold. A scheduled purchase is due, but ${s.total === 1 ? "its condition is" : `${s.unmet.length} of its ${s.total} conditions are`} not met. Waiting for: ${list(s.unmet)}.`;
+        const which = s.total === 1 ? "its condition is" : `${s.unmet.length} of its ${s.total} conditions ${s.unmet.length === 1 ? "is" : "are"}`;
+        text = `Hold. A scheduled purchase is due, but ${which} not met. Waiting for: ${list(s.unmet)}.`;
       } else if (s.total === 1) {
         text = `Hold. Waiting until ${lowerFirst(conditionText(s.unmet[0]!))}.`;
       } else {
@@ -171,9 +173,10 @@ export function explain(x: ExplainInput): string {
       break;
     }
     case "exited":
-      text = `Sell. ${s.reason} Sold ${qtyText(s.fill.qty)} ${x.market} at ${usd(s.fill.price)}, ${pct(s.realizedPct)} on the trade after costs.${
-        s.leftQty ? ` ${qtyText(s.leftQty)} ${x.market} is still held.` : ""
-      }${s.note ? ` ${s.note}` : ""}`;
+      text = `Sell. ${s.reason} Sold ${qtyText(s.fill.qty)} ${x.market} at ${usd(s.fill.price)}, ${pct(s.realizedPct)} on the trade after costs.`;
+      if (s.rest) text += ` ${qtyText(s.rest.qty)} ${x.market} is still held.`;
+      if (s.note) text += ` ${s.note}`;
+      if (s.rest) text += s.rest.retry ? " The agent tries to sell the rest every hour." : " The rest is sold in the next hour the target is still reached.";
       break;
     case "not_bought": {
       const what = s.scheduledDue ? "A scheduled purchase is due" : `The entry rules are met${scheduled ? "" : ` (confidence ${s.confidence}%)`}`;
@@ -181,7 +184,9 @@ export function explain(x: ExplainInput): string {
       break;
     }
     case "not_sold":
-      text = `Hold. ${noDot(s.stillTrying ?? s.reason)}, but the position was not sold: ${lowerFirst(noDot(s.why))}. It is still open, and the agent tries again next hour.`;
+      text = `Hold. ${noDot(s.stillTrying ?? s.reason)}, but the position was not sold: ${lowerFirst(noDot(s.why))}. It is still open, and the agent ${
+        s.retry ? "tries again next hour" : "sells in the next hour its target is still reached"
+      }.`;
       break;
   }
   if (x.notChecked.length) text += ` Not checked: ${joinWith("and", x.notChecked)}.`;

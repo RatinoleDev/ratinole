@@ -47,12 +47,15 @@ export const LIVE = {
    */
   positionFloorUsd: 0.25,
   /**
-   * A vault's daily limit counts buys and sales together. A buy that used up the limit would leave its own
-   * position unsellable until the next 24-hour window, stop loss included. So a buy is never larger than what is
-   * left of the limit divided by this: after it, there is still room to sell what was bought, even 20% higher.
-   * Applies to plans that have an exit. The same figure is checked when an agent is launched.
+   * A vault's daily limit counts buys and sales together. A buy that used up the limit would leave the position
+   * unsellable until the next 24-hour window, stop loss included. So after a buy there must still be room to
+   * sell everything the vault then holds of the token, valued 20% higher: with nothing held, a buy is at most
+   * what is left of the limit divided by this. Applies to plans that have an exit. The same figure is checked
+   * when an agent is launched.
    */
   exitRoomFactor: 2.2,
+  /** Orders stay this far inside what is left of the vault's daily limit: the vault values them with its own oracle. */
+  limitMargin: 0.98,
   /** What the guard assumes a trade costs (pool fee plus typical price impact), in percent. */
   costPct: 0.1,
   /**

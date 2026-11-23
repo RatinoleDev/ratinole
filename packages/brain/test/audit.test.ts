@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { decide, type DecideContext } from "../src/decide";
 import { pct } from "../src/evidence";
-import { initialState, utcDayStart, type LiveFill, type PositionState } from "../src/paper";
+import { OPEN_EXIT_HOURS, initialState, utcDayStart, type LiveFill, type PositionState } from "../src/paper";
 import { formatSignalValue } from "../src/signals";
 import { HOUR_MS, type Candle, type Plan } from "../src/types";
 import { fromCloses, rng } from "./helpers";
@@ -60,6 +60,7 @@ describe("an exit whose sale did not complete", () => {
   it("stays an order to sell after the price comes back, and is sold in the first hour it can be", () => {
     const refused = decide(ctx(), { candles: first, hour: h1.hour, state: inPosition(h1.hour, entry), fillPrice: h1.fillPrice, liveFill: REFUSED });
     expect(refused.decision.action).toBe("hold");
+    expect(refused.exitKind).toBe("stop loss");
     expect(refused.state.qty).toBe(1);
     expect(refused.state.exitPending).toEqual({ since: h1.hour, kind: "stop loss" });
     expect(refused.decision.explanation).toBe(
@@ -98,7 +99,7 @@ describe("an exit whose sale did not complete", () => {
     expect(out.state.avgEntry).toBe(entry);
     expect(out.state.exitPending).toEqual({ since: h1.hour, kind: "stop loss" });
     expect(out.decision.explanation).toMatch(
-      /^Sell\. Stop loss reached: −5\.7% since buying, stop at −4%\. Sold 0\.4000 ETH at \$[\d,.]+, −5\.7% on the trade after costs\. 0\.6000 ETH is still held\. The vault's daily trading limit allowed only part of the position to be sold\.$/,
+      /^Sell\. Stop loss reached: −5\.7% since buying, stop at −4%\. Sold 0\.4000 ETH at \$[\d,.]+, −5\.7% on the trade after costs\. 0\.6000 ETH is still held\. The vault's daily trading limit allowed only part of the position to be sold\. The agent tries to sell the rest every hour\.$/,
     );
 
     // The price is back inside the stop. The rest is sold all the same.
@@ -145,6 +146,56 @@ describe("an exit whose sale did not complete", () => {
     expect(out.decision.action).toBe("sell");
     expect(out.state.exitPending).toBeNull();
   });
+
+  it("lapses after two days: from then on the exits are checked against the prices of the day", () => {
+    const open = (hoursAgo: number) => inPosition(h2.hour, entry, 1, { exitPending: { since: h2.hour - hoursAgo * HOUR_MS, kind: "stop loss" } });
+    // Still open: the position is sold although −1% is inside the stop.
+    expect(decide(ctx(), { candles: all, hour: h2.hour, state: open(OPEN_EXIT_HOURS), fillPrice: h2.fillPrice }).decision.action).toBe("sell");
+    // An hour later it has lapsed. Nothing asks for a sale, and the record no longer carries it.
+    const lapsed = decide(ctx(), { candles: all, hour: h2.hour, state: open(OPEN_EXIT_HOURS + 1), fillPrice: h2.fillPrice });
+    expect(lapsed.decision.action).toBe("hold");
+    expect(lapsed.exitKind).toBeNull();
+    expect(lapsed.state.exitPending).toBeNull();
+    expect(lapsed.decision.explanation).toBe("Hold. In position at −1.0% since buying. Take profit at +8%, stop at −4%.");
+  });
+});
+
+describe("a take profit sells at its target or above, never below", () => {
+  // Three rising hours take the position past its 8% target. An hour later it is 3% under what was paid.
+  const all = series((p) => {
+    const f = rising(3, 0.001)(p);
+    return [...f, (f[2]! / 1.09) * 0.97];
+  });
+  const first = all.slice(0, -1);
+  const h1 = at(first);
+  const h2 = at(all);
+  const entry = h1.close / 1.09;
+
+  it("a refused take profit is not kept as an order to sell: after the price falls back, the agent holds", () => {
+    const refused = decide(ctx({ exit: { takeProfitPct: 8, stopLossPct: 10 } }), { candles: first, hour: h1.hour, state: inPosition(h1.hour, entry), fillPrice: h1.fillPrice, liveFill: REFUSED });
+    expect(refused.decision.action).toBe("hold");
+    expect(refused.exitKind).toBe("take profit");
+    expect(refused.state.exitPending ?? null).toBeNull();
+    expect(refused.decision.explanation).toBe(
+      "Hold. Take profit reached: +9.0% since buying, target +8%, but the position was not sold: the vault is paused. It is still open, and the agent sells in the next hour its target is still reached.",
+    );
+    // −3%: under the target and inside the 10% stop. Selling now would turn a take profit into a loss.
+    const next = decide(ctx({ exit: { takeProfitPct: 8, stopLossPct: 10 } }), { candles: all, hour: h2.hour, state: refused.state, fillPrice: h2.fillPrice });
+    expect(next.decision.action).toBe("hold");
+    expect(next.fill).toBeNull();
+    expect(next.decision.explanation).toBe("Hold. In position at −3.0% since buying. Take profit at +8%, stop at −10%.");
+  });
+
+  it("after a sale of part of the position at the target, the rest waits for the target, and the text says so", () => {
+    const part: LiveFill = { ok: true, side: "sell", qty: 0.4, notional: h1.close * 0.4, fee: 0, note: "The vault's daily trading limit allowed only part of the position to be sold." };
+    const out = decide(ctx(), { candles: first, hour: h1.hour, state: inPosition(h1.hour, entry), fillPrice: h1.fillPrice, liveFill: part });
+    expect(out.decision.action).toBe("sell");
+    expect(out.state.qty).toBeCloseTo(0.6, 12);
+    expect(out.state.exitPending ?? null).toBeNull();
+    expect(out.decision.explanation).toMatch(
+      / on the trade after costs\. 0\.6000 ETH is still held\. The vault's daily trading limit allowed only part of the position to be sold\. The rest is sold in the next hour the target is still reached\.$/,
+    );
+  });
 });
 
 describe("the high a trailing stop follows", () => {
@@ -181,6 +232,24 @@ describe("the high a trailing stop follows", () => {
     const out = decide(ctx(plan), { candles: all, hour, state: bought({}), fillPrice });
     expect(out.decision.action).toBe("hold");
     expect(out.state.peakSeenTo).toBe(all[all.length - 1]!.t);
+  });
+
+  it("a close from before the buy never enters the high, also in an hour whose prices are old", () => {
+    // 2200 two hours before the buy; the buy is at 2000. The hour after, the feed in use ends before the buy.
+    const closes = series(() => []).map((c) => c.c);
+    const candles = fromCloses([...closes, 2200, 2100, 2000]);
+    const buyHour = candles[candles.length - 1]!.t + HOUR_MS;
+    const state = inPosition(buyHour, 2000, 1, { peak: 2000, lastBuyAt: buyHour, peakSeenTo: candles[candles.length - 1]!.t });
+    const old = candles.slice(0, -2); // its newest candle is the one that closed at 2200
+    const stale = decide(ctx({ exit: { trailingStopPct: 5 } }), { candles: old, hour: buyHour + HOUR_MS, state, fillPrice: 2000 });
+    expect(stale.decision.action).toBe("hold");
+    expect(stale.decision.explanation).toMatch(/Waiting for fresh data/);
+    expect(stale.state.peak).toBe(2000);
+    // Fresh prices again, still at 2000: nothing has fallen from any high.
+    const again = fromCloses([...closes, 2200, 2100, 2000, 2000, 2000]);
+    const fresh = decide(ctx({ exit: { trailingStopPct: 5 } }), { candles: again, hour: buyHour + 2 * HOUR_MS, state: stale.state, fillPrice: 2000 });
+    expect(fresh.decision.action).toBe("hold");
+    expect(fresh.state.peak).toBe(2000);
   });
 
   it("a buy starts the high at its own price: closes before it do not count", () => {
@@ -276,6 +345,28 @@ describe("what the explanation says", () => {
     const picky: Partial<Plan> = { ...dca, entry: [{ signal: "rsi", op: "<", value: 30 }] };
     const due = decide(ctx(picky), { candles, hour, state: initialState(10_000, hour), fillPrice });
     expect(due.decision.explanation).toMatch(/^Hold\. A scheduled purchase is due, but its condition is not met\. Waiting for: RSI is below 30 \(now [\d.]+\)\.$/);
+    // One of three: "is", not "are".
+    const three: Partial<Plan> = {
+      ...dca,
+      entry: [
+        { signal: "rsi", op: "<", value: 30 },
+        { signal: "rsi", op: ">", value: 10 },
+        { signal: "rsi", op: "<", value: 99 },
+      ],
+    };
+    expect(decide(ctx(three), { candles, hour, state: initialState(10_000, hour), fillPrice }).decision.explanation).toMatch(/^Hold\. A scheduled purchase is due, but 1 of its 3 conditions is not met\. Waiting for: RSI is below 30 /);
+  });
+
+  it("with a position open and a short history, does not say the exits went unchecked: they were checked", () => {
+    const dca: Partial<Plan> = { kind: "dca", entry: [], cadenceHours: 24, sizePctOfCash: 10, exit: { stopLossPct: 15 } };
+    const short = series(rising(3, 0.001)).slice(-120);
+    const { hour, fillPrice, close } = at(short);
+    // A purchase is due; there is too little history to read the market for a buy. The position's stop was checked.
+    const out = decide(ctx(dca), { candles: short, hour, state: inPosition(hour, close, 1, { lastBuyAt: hour - 30 * HOUR_MS }), fillPrice });
+    expect(out.decision.action).toBe("hold");
+    expect(out.decision.explanation).toBe("Hold. Not enough price history to read the market yet.");
+    // The same position past its stop is sold in that hour.
+    expect(decide(ctx(dca), { candles: short, hour, state: inPosition(hour, close * 1.2, 1, { lastBuyAt: hour - 30 * HOUR_MS }), fillPrice }).decision.action).toBe("sell");
   });
 
   it("names every way out of an open position, with the current reading of each exit rule", () => {

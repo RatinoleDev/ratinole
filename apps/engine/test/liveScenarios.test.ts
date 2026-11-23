@@ -90,7 +90,14 @@ async function setup(p: Plan, moves: number[]) {
     expect(d.equityAfter, `hour ${k} equity`).toBeCloseTo(d.cashAfter + d.qtyAfter * path.price(k), 5);
     return d;
   };
-  return { chain, agent, hour, price: path.price };
+  /** The same run with nothing assumed about how it ends: for hours that end without a decision. */
+  const attempt = (k: number) => {
+    const h = H0 + k * HOUR_MS;
+    chain.price = path.price(k);
+    chain.clock = Math.floor((h + 120_000) / 1000);
+    return runLiveAgentHour(agent.id, h, { prisma, feeds, chain, now: () => h + 120_000 });
+  };
+  return { chain, agent, hour, attempt, price: path.price };
 }
 
 describe.skipIf(!hasDb)("a live agent on a scripted price path", () => {
@@ -186,7 +193,9 @@ describe.skipIf(!hasDb)("a live agent on a scripted price path", () => {
     s.chain.refuse = "the vault is paused";
     const refused = await s.hour(3);
     expect(refused).toMatchObject({ action: "hold", fillSide: null, txHash: null, execError: "the vault is paused" });
-    expect(refused.explanation).toBe("Hold. Take profit reached: +9.2% since buying, target +8%, but the position was not sold: the vault is paused. It is still open, and the agent tries again next hour.");
+    expect(refused.explanation).toBe(
+      "Hold. Take profit reached: +9.2% since buying, target +8%, but the position was not sold: the vault is paused. It is still open, and the agent sells in the next hour its target is still reached.",
+    );
     expect(s.chain.token).toBe(bought);
     // The owner resumes the vault. The target is still reached, so the agent sells now.
     s.chain.refuse = null;
@@ -194,6 +203,93 @@ describe.skipIf(!hasDb)("a live agent on a scripted price path", () => {
     expect(sell).toMatchObject({ action: "sell", qtyAfter: 0 });
     expect(sell.explanation).toMatch(/^Sell\. Take profit reached: \+9\.2% since buying, target \+8%\. Sold /);
     expect(s.chain.token).toBe(0n);
+  });
+
+  it("a take profit that could not be sold is never sold under its target: after the price falls back, the agent holds", async () => {
+    // +9.2% at hour 3, and the vault is paused. Two hours later the owner unpauses it, with the price under what was paid.
+    const s = await setup(plan({ takeProfitPct: 8, stopLossPct: 10 }), [3, 3, 3, -6, -5, 0]);
+    await s.hour(0);
+    await s.hour(1);
+    await s.hour(2);
+    const bought = s.chain.token;
+    s.chain.refuse = "the vault is paused";
+    expect((await s.hour(3)).explanation).toMatch(/^Hold\. Take profit reached: \+9\.2% since buying, target \+8%, but the position was not sold: the vault is paused\./);
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } })).toMatchObject({ exitPendingSince: null, exitPendingKind: null });
+    await s.hour(4);
+    s.chain.refuse = null;
+    const after = await s.hour(5);
+    expect(after.action).toBe("hold");
+    expect(after.explanation).toBe("Hold. In position at −2.5% since buying. Take profit at +8%, stop at −10%.");
+    expect(s.chain.token).toBe(bought);
+    // The buy, and the one refused sale. Once the target was no longer reached, no sale was tried again.
+    expect(s.chain.asked).toBe(2);
+  });
+
+  it("a position built by several scheduled buys never grows past what the vault's daily limit can still sell", async () => {
+    // $1,000, a buy of 25% of the cash every hour, a 4% stop. The vault lets $600 be traded today.
+    const hourly: Plan = { markets: ["ETH"], kind: "dca", entry: [], cadenceHours: 1, sizePctOfCash: 25, exit: { stopLossPct: 4 }, filters: [] };
+    const s = await setup(hourly, [0, 0, -6, 0]);
+    s.chain.remainingUsd = 600;
+    expect((await s.hour(0)).fillNotional).toBe(250);
+    // The second buy is cut to what still leaves room to sell both.
+    const second = await s.hour(1);
+    expect(second.action).toBe("buy");
+    expect(second.fillNotional).toBeGreaterThan(15);
+    expect(second.fillNotional).toBeLessThan(25);
+    expect(second.explanation).toMatch(/The order is smaller than the 25% the plan asks for, so that the sale of this position still fits in the vault's daily trading limit\.$/);
+    // A third would leave a position the limit could not sell today. It is not placed.
+    const third = await s.hour(2);
+    expect(third).toMatchObject({ action: "hold", execError: "the vault's daily trading limit has too little left for a buy and the sale that would follow it" });
+    const held = fromUnits(s.chain.token, 18) * s.price(2);
+    expect(s.chain.remainingUsd * 0.98).toBeGreaterThan(held);
+    // The stop is hit. All of it is sold, in the same day's limit.
+    const sell = await s.hour(3);
+    expect(sell).toMatchObject({ action: "sell", qtyAfter: 0, execError: null });
+    expect(sell.explanation).toMatch(/^Sell\. Stop loss reached: −6\.\d% since buying, stop at −4%\./);
+    expect(sell.explanation).not.toMatch(/still held/);
+    expect(s.chain.token).toBe(0n);
+  });
+
+  it("a stop reached in an hour when the chain could not be reached at all is still sold the next hour", async () => {
+    const s = await setup(plan({ takeProfitPct: 8, stopLossPct: 4 }), [-5, 4.2, 0]);
+    await s.hour(0);
+    // −5%: the agent wants to sell, and cannot reach the chain to place the order. The hour ends with no decision.
+    s.chain.unreachable = 1;
+    await expect(s.attempt(1)).rejects.toThrow(/fetch failed/);
+    expect(await prisma.decision.count({ where: { agentId: s.agent.id } })).toBe(1);
+    expect(await prisma.liveOrder.count({ where: { side: "sell" } })).toBe(0);
+    // What it wanted is on the record all the same.
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } })).toMatchObject({ exitPendingSince: new Date(H0 + HOUR_MS), exitPendingKind: "stop loss" });
+    // An hour later the price is back inside the stop. The position is sold.
+    const sell = await s.hour(2);
+    expect(sell).toMatchObject({ action: "sell", qtyAfter: 0 });
+    expect(sell.explanation).toMatch(/^Sell\. Finishing the sale from \d\d:00 UTC on \d{1,2} [A-Z][a-z]{2} \(stop loss reached\)\. Now −1\.1% since buying\./);
+    expect(s.chain.token).toBe(0n);
+  });
+
+  it("tokens the owner sends right after a sale are a new position, not the rest of the old one", async () => {
+    const s = await setup(plan({ stopLossPct: 4 }), [-5, 0, 0]);
+    await s.hour(0);
+    const bought = s.chain.token;
+    // The stop-loss sale of the whole position lands, and the run dies before it writes the hour down.
+    s.chain.drop = "afterSend";
+    await expect(s.attempt(1)).rejects.toThrow();
+    expect(s.chain.token).toBe(0n);
+    s.chain.drop = null;
+    // Before the retry, the owner sends twice as many tokens to the vault.
+    s.chain.token = bought * 2n;
+    const booked = await s.hour(1);
+    expect(booked).toMatchObject({ action: "sell", fillSide: "sell" });
+    expect(booked.fillQty).toBeCloseTo(fromUnits(bought, 18), 10);
+    expect(booked.explanation).toMatch(/Sold 0\.1249 ETH at \$[\d,.]+\. 0\.2499 ETH that came into the vault since is now held\.$/);
+    // No exit is open on it, and it is counted as bought at this hour's price.
+    const state = await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } });
+    expect(state).toMatchObject({ exitPendingSince: null, exitPendingKind: null });
+    expect(state.avgEntry).toBeCloseTo(s.price(1), 6);
+    const next = await s.hour(2);
+    expect(next.action).toBe("hold");
+    expect(next.explanation).toBe("Hold. In position at 0.0% since buying. Stop at −4%.");
+    expect(s.chain.token).toBe(bought * 2n);
   });
 
   it("an exit that was reached stays an order to sell: refused at the stop, it is sold the next hour although the price is back", async () => {

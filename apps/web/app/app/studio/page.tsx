@@ -267,10 +267,13 @@ export default function StudioPage() {
                   well past its stop.
                 </li>
                 <li>
-                  If the price data is late or a trade is refused, it waits and says why. It does not trade late. A sale that could not be made is tried again
-                  every hour until the position is sold.
+                  If the price data is late or a trade is refused, it waits and says why. It does not trade late. A stop that was reached and could not be sold
+                  is tried again every hour, for up to two days.
                 </li>
-                <li>Your vault's daily limit counts buys and sales together, so each buy is kept small enough for its sale to fit the same day.</li>
+                <li>
+                  Your vault's daily limit counts buys and sales together, so the agent never holds more than it could sell in one day: a buy is made smaller, or
+                  skipped, to keep it so.
+                </li>
                 <li>You can pause the agent, pause the vault, or withdraw at any time.</li>
               </ul>
               <label className="agree">

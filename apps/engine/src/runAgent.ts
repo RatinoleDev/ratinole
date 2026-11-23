@@ -54,7 +54,7 @@ export const WAIT_FOR_CANDLE_MS = 15 * 60_000;
 export const hourFloor = (ms: number) => Math.floor(ms / HOUR_MS) * HOUR_MS;
 
 const EXIT_KINDS: readonly ExitKind[] = ["take profit", "stop loss", "trailing stop", "exit rule"];
-const isExitKind = (v: unknown): v is ExitKind => EXIT_KINDS.includes(v as ExitKind);
+export const isExitKind = (v: unknown): v is ExitKind => EXIT_KINDS.includes(v as ExitKind);
 
 export function toState(s: {
   cash: number;

@@ -175,6 +175,9 @@ model LiveOrder {
   /// Why the order was smaller than the plan asked for, as a sentence for the explanation. Kept with the order so
   /// that a run which books it later still says so.
   note      String?
+  /// For a sale: which exit asked for it ("take profit" | "stop loss" | "trailing stop" | "exit rule"), so that a
+  /// run which books it later knows whether the rest of a sale cut short is still to be sold.
+  exitKind  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

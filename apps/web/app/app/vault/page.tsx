@@ -77,8 +77,8 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
         <input type="range" min={50} max={5000} step={50} value={Math.min(5000, Math.max(50, limit))} onChange={(e) => setLimit(Number(e.target.value))} disabled={disabled} />
       </label>
       <p className="hint" style={{ margin: 0 }}>
-        Buys and sales both count towards it. An agent that has an exit rule keeps each buy under <b className="num">${Math.floor(limit / LIVE.exitRoomFactor).toLocaleString("en-US")}</b>,
-        so that it can always sell what it bought on the same day.
+        Buys and sales both count towards it. An agent that has an exit rule never holds more than it could sell in one day: with nothing held, its largest
+        buy is <b className="num">${Math.floor((limit * LIVE.limitMargin) / LIVE.exitRoomFactor).toLocaleString("en-US")}</b>.
       </p>
       <label>
         <span>
