@@ -163,10 +163,23 @@ const isAddress = (a) => /^0x[0-9a-fA-F]{40}$/.test(a ?? "");
 const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
 /**
- * The Safe is the admin of the contracts. A key that sits on this server must never be one of its owners:
+ * The Safe is the admin of the contracts. A key that sits on this server should not be one of its owners:
  * whoever gets into the server would get the admin with it, and the deployer key is removed after deploying,
  * which would throw the admin away for good.
+ *
+ * There is one way around this, for an owner who wants two wallets and no third: `safe deployer` makes the
+ * deployer key the Safe's one owner. It is then the ADMIN key for good. The owner is told so before anything is
+ * sent, must have it backed up, and must take it off this server before the site opens. The agent's key (the
+ * operator) is never accepted: it signs every hour and is the most exposed key there is.
  */
+const deployerOwns = (owners) => !!deployerAddress() && owners.some((o) => same(o, deployerAddress()));
+const operatorOwns = (owners) => !!operatorAddress() && owners.some((o) => same(o, operatorAddress()));
+const ADMIN_KEY_RULES =
+  "  - Back it up NOW if you have not:  node scripts/keys.mjs show deployer\n" +
+  "  - If it is lost, the admin of the contracts is lost with it. Nobody can get it back.\n" +
+  "  - Whoever has it controls the admin. Every change still waits 3 days in the timelock.\n" +
+  "  - Before the site opens it is taken off this server (node scripts/keys.mjs remove deployer). Your backup is then the only copy.\n" +
+  "  - You can hand the admin to another wallet later, from the Safe.";
 function serverKeyAmong(owners) {
   for (const [label, address] of [["deployer key", deployerAddress()], ["agent's key (the operator)", operatorAddress()]]) {
     if (address && owners.some((o) => same(o, address))) return { label, address };
@@ -274,8 +287,12 @@ async function checkBeforeOpen(d, operator) {
   if (!same(admin, d.timelock)) fail(`The factory's admin is ${admin}, not the timelock in the record (${d.timelock}). Do not open.`);
   const safe = isAddress(d.safe) ? await safeAt(d.safe) : null;
   if (!safe) fail(`The admin Safe in the record (${d.safe}) could not be read as a Safe on this chain. Do not open.`);
-  const onServer = serverKeyAmong(safe.owners);
-  if (onServer) fail(`${onServer.address}, this server's ${onServer.label}, is an owner of the admin Safe.\nA key on the server must not hold the admin. In the Safe, replace that owner with a wallet you hold yourself, and do not remove that key from the server until you have. Do not open.`);
+  if (operatorOwns(safe.owners)) fail(`${operatorAddress()}, this server's agent key, is an owner of the admin Safe.\nThe key that trades must not hold the admin. In the Safe, replace that owner with a wallet you hold yourself. Do not open.`);
+  // The deployer key as the admin key is the owner's choice (`safe deployer`), but not while it sits on this
+  // server next to the site: it is backed up and taken off first. A rehearsal has only public test keys.
+  if (mainnet && deployerOwns(safe.owners)) {
+    fail(`The admin Safe is owned by the deployer key, and that key is still on this server.\nBefore the site opens, the admin key has to be off the server:\n  1. check that you have it backed up:  node scripts/keys.mjs show deployer\n  2. take it off this server:          node scripts/keys.mjs remove deployer\nThen run open again. Nothing was changed.`);
+  }
   const cfg = JSON.parse(readFileSync(join(root, "contracts", "config", "robinhood.json"), "utf8"));
   const want = cfg.vaultTokens.map((symbol) => cfg.tokens.find((t) => t.symbol === symbol));
   const [, tokens, feeds, , feeTiers] = defaults;
@@ -314,10 +331,14 @@ if (cmd === "status") {
     console.log(`Factory's operator:        ${onChain ?? "could not be read on this chain"}${onChain ? (same(onChain, operator) ? " (matches the agent's key)" : " (DOES NOT match the agent's key)") : ""}`);
     const safe = isAddress(d.safe) ? await safeAt(d.safe) : null;
     console.log(`Admin Safe:                ${safe ? `${safe.owners.length} owner(s), ${safe.threshold} needed to approve` : "could not be read as a Safe on this chain"}`);
-    const onServer = safe ? serverKeyAmong(safe.owners) : null;
-    if (onServer) {
-      console.log(`                           WARNING: ${onServer.address}, this server's ${onServer.label}, is an owner of the Safe.`);
-      console.log("                           Replace that owner in the Safe with a wallet you hold yourself. Do NOT remove that key until you have.");
+    if (safe && operatorOwns(safe.owners)) {
+      console.log(`                           WARNING: ${operatorAddress()}, this server's agent key, is an owner of the Safe.`);
+      console.log("                           Replace that owner in the Safe with a wallet you hold yourself.");
+    } else if (safe && deployerOwns(safe.owners)) {
+      console.log("                           Its owner is this server's deployer key: that key is your ADMIN key.");
+      console.log("                           Check your backup (node scripts/keys.mjs show deployer), then take it off this server before opening: node scripts/keys.mjs remove deployer");
+    } else if (safe && isAddress(d.deployer) && safe.owners.some((o) => same(o, d.deployer))) {
+      console.log(`                           Its owner is the deployer key (${d.deployer}), which is not on this server: your backup of it is the admin key.`);
     } else if (mainnet && deployer && d.verified === true) {
       console.log("Deployer key:              no longer needed on this server. Move any ETH left on it, then: node scripts/keys.mjs remove deployer");
     }
@@ -331,13 +352,25 @@ if (cmd === "status") {
     if (inShell.length) console.log(`                           WARNING: this shell has ${inShell.join(" and ")} set to something else; a reload from this shell would use that. Clear it: unset ${inShell.join(" ")}`);
     if (open && d && !same(open, d.factory)) console.log("                           WARNING: .env names a different factory than the deployment record.");
   }
+} else if (cmd === "safe" && arg === "deployer") {
+  // Two wallets and no third: the deployer key owns the Safe, and so becomes the admin key.
+  const deployer = deployerAddress();
+  if (!deployer) fail("No deployer key yet. Create it with: node scripts/keys.mjs create deployer");
+  await confirm("CREATE", `This creates a Safe on Robinhood Chain owned by this server's deployer key:\n  ${deployer}\n\nThat key becomes your ADMIN key, for good:\n${ADMIN_KEY_RULES}`);
+  if (!hardhat("create-safe.js", { SAFE_OWNERS: deployer, SAFE_THRESHOLD: "1", SAFE_FORBIDDEN_OWNERS: operatorAddress() ?? "", SAFE_OWNER_IS_DEPLOYER: "1" })) {
+    fail("That step failed. Read the message above. If it printed a Safe address, keep it.");
+  }
+  console.log(`Keep the SAFE_ADDRESS above. Next: node scripts/go-live.mjs deploy <that address>${rehearsalFlag}`);
 } else if (cmd === "safe") {
   const owners = arg.split(",").filter(Boolean);
-  if (!owners.length || !owners.every(isAddress)) fail("Give the wallet(s) that will own the Safe: node scripts/go-live.mjs safe 0xYourWallet   or   safe 0xYourWallet,0xSecondSigner 2");
+  if (!owners.length || !owners.every(isAddress)) fail("Give the wallet(s) that will own the Safe: node scripts/go-live.mjs safe 0xYourWallet   or   safe 0xYourWallet,0xSecondSigner 2\nWith no wallet of your own, the deployer key can own it:  node scripts/go-live.mjs safe deployer");
   if (owners.some((o) => /^0x0{40}$/.test(o))) fail("The zero address cannot own a Safe.");
   if (new Set(owners.map((o) => o.toLowerCase())).size !== owners.length) fail("The same wallet is listed twice.");
   const onServer = serverKeyAmong(owners);
-  if (onServer) fail(serverKeyRefusal(onServer));
+  if (onServer) {
+    const twoWallets = onServer.label === "deployer key" ? `\nIf you want the deployer key to own the Safe on purpose (two wallets and no third), say so:  node scripts/go-live.mjs safe deployer${rehearsalFlag}` : "";
+    fail(`${serverKeyRefusal(onServer)}${twoWallets}`);
+  }
   if (owners.length > 1 && !third) fail(`Say how many of the ${owners.length} wallets must approve, for example: node scripts/go-live.mjs safe ${owners.join(",")} 2`);
   const threshold = Number(third ?? 1);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > owners.length) fail(`The number of approvals must be between 1 and ${owners.length}.`);
@@ -364,17 +397,23 @@ if (cmd === "status") {
   }
   if (same(arg, operator) || same(arg, deployerAddress())) fail("The Safe must be a different address from the keys on this server.");
   const safe = await readSafe(arg);
-  const onServer = serverKeyAmong(safe.owners);
-  if (onServer) fail(`The Safe at ${arg} cannot be used as the admin.\n${serverKeyRefusal(onServer)}\nCreate a Safe owned by your own wallet:  node scripts/go-live.mjs safe 0xYourWallet${rehearsalFlag}`);
+  if (operatorOwns(safe.owners)) {
+    fail(`The Safe at ${arg} cannot be used as the admin.\n${serverKeyRefusal({ label: "agent's key (the operator)", address: operatorAddress() })}\nCreate a Safe owned by your own wallet:  node scripts/go-live.mjs safe 0xYourWallet${rehearsalFlag}`);
+  }
+  // The deployer key as the Safe's owner is allowed only as its one owner, the way `safe deployer` makes it.
+  const adminIsDeployer = deployerOwns(safe.owners);
+  if (adminIsDeployer && safe.owners.length !== 1) fail(`The Safe at ${arg} has this server's deployer key among several owners. Use a Safe whose owners are all wallets you hold yourself, or one made with:  node scripts/go-live.mjs safe deployer${rehearsalFlag}`);
+  if (adminIsDeployer) console.log(`\nThe Safe's owner is this server's deployer key. It is your ADMIN key, for good:\n${ADMIN_KEY_RULES}`);
   await confirm(
     "DEPLOY",
     `This deploys the Ratinole contracts to Robinhood Chain MAINNET.\n  Admin: your Safe ${arg}, behind a 3-day timelock\n    Safe owners (${safe.threshold} of ${safe.owners.length} must approve):\n      ${safe.owners.join("\n      ")}\n  Agent (operator and registry poster): ${operator}\nCheck that the owners above are wallets you control. It cannot be undone. It costs a small network fee, paid by the deployer key.`,
   );
-  if (!hardhat("deploy.js", { SAFE_ADDRESS: arg, OPERATOR_ADDRESS: operator, POSTER_ADDRESS: operator, ...(mainnet ? { CONFIRM_MAINNET: "deploy-ratinole-mainnet" } : {}) })) {
+  if (!hardhat("deploy.js", { SAFE_ADDRESS: arg, OPERATOR_ADDRESS: operator, POSTER_ADDRESS: operator, ...(adminIsDeployer ? { ADMIN_KEY_IS_DEPLOYER: "1" } : {}), ...(mainnet ? { CONFIRM_MAINNET: "deploy-ratinole-mainnet" } : {}) })) {
     fail(`That step failed. Read the message above.\nIf it printed contract addresses, the contracts exist: keep the addresses, do NOT deploy again, and run  node scripts/go-live.mjs verify${rehearsalFlag}`);
   }
   console.log(`\nDeployed. Live trading is still closed on the site. Check \`node scripts/go-live.mjs status${rehearsalFlag}\`, then open it with \`node scripts/go-live.mjs open${rehearsalFlag}\`.`);
-  if (mainnet) console.log("The deployer key is not needed any more. Move any ETH left on it, then: node scripts/keys.mjs remove deployer");
+  if (mainnet && adminIsDeployer) console.log("The deployer key is your ADMIN key. Check that you have it backed up (node scripts/keys.mjs show deployer), then take it off this server: node scripts/keys.mjs remove deployer");
+  else if (mainnet) console.log("The deployer key is not needed any more. Move any ETH left on it, then: node scripts/keys.mjs remove deployer");
 } else if (cmd === "verify") {
   if (!deployment()) fail(`There is nothing to check: no deployment is recorded for ${network}. Deploy first: node scripts/go-live.mjs deploy 0xSafeAddress${rehearsalFlag}`);
   // Reads only: no key is given to it, and nothing is sent.

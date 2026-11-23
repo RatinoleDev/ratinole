@@ -33,13 +33,19 @@ async function main() {
   const safe = await readSafe({ ethers, safe: record.safe });
   if (!safe) throw new Error(`There is no contract at the Safe's address ${record.safe} on this chain. The admin of these contracts is an address nobody controls here.`);
   console.log(`  ok  the admin is a Safe on this chain: ${safe.threshold} of ${safe.owners.length} owners must approve`);
-  const onServer = { deployer: record.deployer, operator: record.operator, poster: record.poster };
-  for (const [what, address] of Object.entries(onServer)) {
-    if (safe.owners.some((o) => o.toLowerCase() === address.toLowerCase())) {
-      throw new Error(`The ${what} key (${address}) is an owner of the Safe. A key that sits on the server must not hold the admin: replace that owner in the Safe before going on, and do not remove that key until you have.`);
-    }
+  // The agent's key must never own the Safe. The deployer key may, as its one owner, when the owner chose two
+  // wallets and no third: it is then the admin key, kept by the owner and taken off the server before opening.
+  const isOwner = (address) => safe.owners.some((o) => o.toLowerCase() === address.toLowerCase());
+  for (const [what, address] of Object.entries({ operator: record.operator, poster: record.poster })) {
+    if (isOwner(address)) throw new Error(`The ${what} key (${address}) is an owner of the Safe. The key that trades must not hold the admin: replace that owner in the Safe before going on.`);
   }
-  console.log('  ok  no key that sits on the server is an owner of the Safe');
+  if (isOwner(record.deployer)) {
+    if (safe.owners.length !== 1) throw new Error(`The deployer key (${record.deployer}) is one of several owners of the Safe. It may only be its one owner, or not an owner at all.`);
+    console.log(`  ok  the agent's key is not an owner of the Safe`);
+    console.log(`  note  the Safe's one owner is the deployer key (${record.deployer}): it is the ADMIN key. Keep its backup safe and keep it off the server.`);
+  } else {
+    console.log('  ok  no key that sits on the server is an owner of the Safe');
+  }
 
   const passed = await checkDeployment({
     ethers,

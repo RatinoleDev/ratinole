@@ -80,7 +80,7 @@ if (cmd === "create") {
   console.log(
     who === "operator"
       ? "Next: back the key up (node scripts/keys.mjs show operator), and send this address a little ETH on Robinhood Chain: it pays the network fee of every trade."
-      : "Next: send this address a little ETH on Robinhood Chain to pay for the deployment. It keeps no power afterwards.",
+      : "Next: send this address a little ETH on Robinhood Chain to pay for the deployment. It keeps no power afterwards,\nunless you make it the owner of your Safe (node scripts/go-live.mjs safe deployer): then it is your admin key.",
   );
 } else if (cmd === "remove") {
   if (who !== "deployer") stop("Only the deployer key can be removed here. The operator key is the agent's key: without it no live agent can trade.");
@@ -88,8 +88,11 @@ if (cmd === "create") {
   if (!key) stop("There is no deployer key in .env. Nothing to remove.");
   const address = privateKeyToAccount(key).address;
   console.log(`\nDeployer address: ${address}`);
-  console.log("This key has no power over the contracts. Any ETH still at that address is lost with the key, unless you");
-  console.log("have backed the key up (node scripts/keys.mjs show deployer) or moved the ETH away first.");
+  console.log("If this key owns your Safe (you ran: go-live.mjs safe deployer), it is your ADMIN key. After this, your backup");
+  console.log("of it is the only copy, and without it the admin of the contracts is lost for good. Check that you have it:");
+  console.log("  node scripts/keys.mjs show deployer");
+  console.log("Otherwise it has no power over the contracts. Any ETH still at that address is lost with the key, unless you");
+  console.log("have backed the key up or moved the ETH away first.");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question("\nType REMOVE to take the deployer key off this server, anything else to stop: ");
   rl.close();

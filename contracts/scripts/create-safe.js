@@ -8,6 +8,8 @@
 // One owner with a threshold of 1 works, but it is not a multisig: add a second signer as soon as you can.
 // The deployer only pays the fee and has no power over the Safe. An owner must be a wallet held away from the
 // server: the deployer's own address is refused, and so is any address in SAFE_FORBIDDEN_OWNERS (the agent's key).
+// One exception, chosen by the owner and never by default: SAFE_OWNER_IS_DEPLOYER=1 creates a Safe whose one
+// owner is the deployer key itself. That key is then the admin key, and must be backed up and kept off the server.
 const { ethers, network } = require('hardhat');
 
 const SAFE = {
@@ -34,7 +36,12 @@ async function main() {
   if (!deployer) throw new Error('Set DEPLOYER_PRIVATE_KEY (it only pays the network fee)');
   // The Safe will be the admin of the contracts. A key that sits on the server must not own it: the deployer key
   // is thrown away after deploying, and whoever gets into the server must not get the admin with it.
-  const forbidden = [await deployer.getAddress(), ...(process.env.SAFE_FORBIDDEN_OWNERS || '').split(',').map((a) => a.trim()).filter(Boolean)];
+  const deployerAddr = await deployer.getAddress();
+  const ownerIsDeployer = process.env.SAFE_OWNER_IS_DEPLOYER === '1';
+  if (ownerIsDeployer && !(owners.length === 1 && owners[0].toLowerCase() === deployerAddr.toLowerCase())) {
+    throw new Error('SAFE_OWNER_IS_DEPLOYER is only for a Safe whose one owner is the deployer key. Nothing was sent.');
+  }
+  const forbidden = [...(ownerIsDeployer ? [] : [deployerAddr]), ...(process.env.SAFE_FORBIDDEN_OWNERS || '').split(',').map((a) => a.trim()).filter(Boolean)];
   for (const owner of owners) {
     if (forbidden.some((f) => f.toLowerCase() === owner.toLowerCase())) {
       throw new Error(`${owner} is a key that sits on this server (the deployer or the agent). Give a wallet you hold yourself, away from the server. Nothing was sent.`);
@@ -66,7 +73,8 @@ async function main() {
     throw new Error(`The Safe at ${address} does not have the owners or threshold that were asked for. Do not use it.`);
   }
   console.log(`\nSAFE_ADDRESS=${address}\n`);
-  console.log(owners.length === 1 ? 'One owner only: this is not a multisig yet. Add a second signer in the Safe as soon as you can.' : `Any ${threshold} of the ${owners.length} owners can approve.`);
+  if (ownerIsDeployer) console.log('Its one owner is the deployer key: that key is now your admin key. Keep its backup safe.');
+  else console.log(owners.length === 1 ? 'One owner only: this is not a multisig yet. Add a second signer in the Safe as soon as you can.' : `Any ${threshold} of the ${owners.length} owners can approve.`);
 }
 
 main().catch((e) => {

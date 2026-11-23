@@ -88,6 +88,19 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
    the server, so whoever gets into the server would get the admin too, and the deployer key is removed after
    deploying, which would throw the admin away for good.
 
+   **With two wallets and no third**, the deployer key can own the Safe:
+
+   ```bash
+   node scripts/go-live.mjs safe deployer
+   ```
+
+   The deployer key is then your **admin key, for good**. Back it up before you go on
+   (`node scripts/keys.mjs show deployer`): if it is lost, the admin is lost with it, and whoever has it
+   controls the admin (every change still waits 3 days in the timelock). After deploying, the script will not
+   open the site while that key is still on the server: you take it off with `node scripts/keys.mjs remove
+   deployer`, and your backup is then the only copy. You can hand the admin to another wallet later, from the
+   Safe. The agent's key (the operator) can never own the Safe.
+
 6. **Deploy the contracts**:
 
    ```bash

@@ -49,7 +49,14 @@ async function main() {
   if (found) {
     // The Safe is the admin. A key that sits on the server (the deployer, the agent) must not be one of its
     // owners: whoever gets into the server would get the admin too, and the deployer key is thrown away after.
-    const onServer = { 'the deployer': await deployer.getAddress(), 'the operator': operator, 'the poster': poster };
+    // The owner may choose the deployer key as the Safe's one owner (ADMIN_KEY_IS_DEPLOYER=1): it is then the
+    // admin key, backed up by the owner and taken off the server before the site opens. Never the agent's key.
+    const adminIsDeployer = process.env.ADMIN_KEY_IS_DEPLOYER === '1';
+    const deployerAddr = await deployer.getAddress();
+    if (adminIsDeployer && !(found.owners.length === 1 && found.owners[0].toLowerCase() === deployerAddr.toLowerCase())) {
+      throw new Error('ADMIN_KEY_IS_DEPLOYER is only for a Safe whose one owner is the deployer key. Nothing was sent.');
+    }
+    const onServer = { ...(adminIsDeployer ? {} : { 'the deployer': deployerAddr }), 'the operator': operator, 'the poster': poster };
     for (const [what, address] of Object.entries(onServer)) {
       if (found.owners.some((o) => o.toLowerCase() === address.toLowerCase())) {
         throw new Error(`${address} is ${what}'s address and also an owner of the Safe. The Safe's owners must be wallets held away from the server. Nothing was sent.`);
