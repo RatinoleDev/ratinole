@@ -494,7 +494,7 @@ test("live mode: real-money agents are listed apart, with their transactions and
   await expect(page.getByText(/Stopped by the engine\./)).toBeVisible();
   await expect(page.getByText(/The vault is empty, so this agent was stopped/)).toBeVisible();
   await expect(page.getByRole("link", { name: /See the transaction/ })).toHaveAttribute("href", "https://robinhoodchain.blockscout.com/tx/0xabc123");
-  await expect(page.getByText(/You deposited \$50\.00 since the previous decision/)).toBeVisible();
+  await expect(page.getByText(/\$50\.00 came into the vault since the previous decision/)).toBeVisible();
   await expect(page.getByText("Live trading: real money in your own vault.")).toBeVisible();
   // The choice is remembered on this device.
   await page.reload();

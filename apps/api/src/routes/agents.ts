@@ -151,6 +151,12 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
     const bt = await deps.prisma.backtest.findUnique({ where: { id: body.data.backtestId } });
     if (!bt || bt.userId !== user.id) return sendError(reply, 404, "not_found", "No such backtest.");
     if (bt.status !== "done" || !bt.params) return sendError(reply, 409, "backtest_not_done", "Wait for the backtest to finish before launching.");
+    // The size cap may have been lowered in Settings since the backtest. An agent launched over its own cap would
+    // have every buy vetoed, hour after hour, and never trade.
+    const size = (bt.plan as unknown as Plan).sizePctOfCash;
+    if (size > user.maxSizePct) {
+      return sendError(reply, 409, "size_over_cap", `This strategy uses ${size}% of cash per trade, over your ${user.maxSizePct}% cap. Raise the cap in Settings, or write the strategy with a smaller size.`);
+    }
     const live = body.data.mode === "live";
     // One launch at a time per wallet: two requests sent together must not both pass the limits below. The lock
     // is held in Redis for the length of this request and released at the end.

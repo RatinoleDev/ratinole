@@ -5,6 +5,11 @@ import { useState } from "react";
 import { actionLabel, actionTag, hourLabel, signed, usd } from "../../lib/format";
 import { RobotAvatar } from "../robot/RobotAvatar";
 
+/** A token amount: four decimals from one unit up, four significant digits under it, so small trades do not read as zero. */
+const qty = (q: number) => (q >= 1 ? q.toFixed(4) : q.toPrecision(4));
+/** A cost in dollars. A real cost too small for two decimals is not shown as "$0.00". */
+const smallUsd = (v: number) => (v > 0 && v < 0.005 ? "under $0.01" : usd(v, 2));
+
 /** One decision as a feed row: action, hour, explanation, and its evidence and checks on demand. */
 export function DecisionRow({ d, showAgent = false }: { d: DecisionDTO; showAgent?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -30,15 +35,15 @@ export function DecisionRow({ d, showAgent = false }: { d: DecisionDTO; showAgen
       {d.flowUsd != null && (
         <div className="meta" style={{ marginTop: 4, marginBottom: 0 }}>
           <span>
-            {d.flowUsd > 0 ? "You deposited" : "You withdrew"} {usd(Math.abs(d.flowUsd), 2)} since the previous decision. It is not counted as a gain or a loss.
+            {usd(Math.abs(d.flowUsd), 2)} {d.flowUsd > 0 ? "came into" : "left"} the vault since the previous decision. It is not counted as a gain or a loss.
           </span>
         </div>
       )}
       {d.fill && (
         <div className="meta" style={{ marginTop: 4, marginBottom: 0 }}>
           <span>
-            {d.fill.side === "buy" ? "Bought" : "Sold"} {d.fill.qty.toFixed(6)} at {usd(d.fill.price, 2)}, {usd(d.fill.notional, 2)}{" "}
-            with {usd(d.fill.fee, 2)} cost
+            {d.fill.side === "buy" ? "Bought" : "Sold"} {qty(d.fill.qty)} {d.market} at {usd(d.fill.price, 2)} for {usd(d.fill.notional, 2)}.{" "}
+            {d.mode === "live" ? "Pool fee" : "Simulated cost"}: {smallUsd(d.fill.fee)}.
           </span>
           {d.txHash && (
             <a href={explorerTx(CHAIN.explorerUrl, d.txHash)} target="_blank" rel="noopener noreferrer">

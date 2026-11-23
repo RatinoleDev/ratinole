@@ -24,6 +24,13 @@ export default function Risk() {
         cannot separate skill from luck; the backtest says so when that happens. Backtests use price signals only, and past
         markets do not repeat.
       </p>
+      <h2>Agents act once an hour</h2>
+      <p>
+        An agent reads the market and decides once an hour. A stop loss, a take profit or a trailing stop is checked at
+        that moment and not in between. If the price moves fast within the hour, the position is sold at the price of the
+        next check, which can be well past the level you set. An order that is refused, or that cannot be placed early in
+        the hour, is not placed late: the agent waits for the next hour and says why.
+      </p>
       <h2>Software and data can fail</h2>
       <p>
         Agents depend on market data, servers and code. Data can arrive late or wrong, and a run can be missed. When data is

@@ -37,11 +37,17 @@ function pretendVaults(owner: string) {
   const state = {
     has: true,
     down: false,
+    /** ETH the agent's key holds for network fees. */
+    operatorEth: 0.01,
     info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0, otherUnpriced: false } as VaultInfo,
   };
   const reader: VaultReader = {
     factory: FACTORY,
     defaultOperator: async () => OPERATOR,
+    operatorEth: async () => {
+      if (state.down) throw new Error("rpc down");
+      return state.operatorEth;
+    },
     vaultOf: async (who) => {
       if (state.down) throw new Error("rpc down");
       return state.has && who.toLowerCase() === owner.toLowerCase() ? VAULT : null;
@@ -426,6 +432,48 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect(await allow(redis, "test:fresh", 2, 60)).toBe(true);
     expect(await allow(redis, "test:fresh", 2, 60)).toBe(true);
     expect(await allow(redis, "test:fresh", 2, 60)).toBe(false);
+  });
+
+  it("the health check tells the owner when the agent's key is running out of fee money, or an agent is on stale data", async () => {
+    const now = Date.UTC(2026, 10, 20, 10, 20);
+    const s = await withVault(now);
+    await redis.set("engine:heartbeat", new Date(now - 30_000).toISOString());
+    const health = async () => (await app.inject({ method: "GET", url: "/api/health" })).json();
+    expect(await health()).toMatchObject({ ok: true, staleAgents: 0, live: { failedOrders: 0, operatorEth: 0.01, operatorLow: false } });
+
+    // The key's balance falls under the level at which trades may stop going through.
+    s.vault.operatorEth = 0.0001;
+    await redis.del("live:operatorEth");
+    expect(await health()).toMatchObject({ ok: false, live: { operatorEth: 0.0001, operatorLow: true } });
+    // A chain that cannot be asked is not reported as an empty key.
+    s.vault.down = true;
+    await redis.del("live:operatorEth");
+    expect(await health()).toMatchObject({ ok: true, live: { operatorEth: null, operatorLow: false } });
+    s.vault.down = false;
+    s.vault.operatorEth = 0.01;
+    await redis.del("live:operatorEth");
+
+    // An agent whose decision for the latest hour was made without fresh prices: no stop is acted on meanwhile.
+    const { id } = (await s.launch()).json();
+    const hour = new Date(Date.UTC(2026, 10, 20, 10));
+    await prisma.agent.update({ where: { id }, data: { owedFrom: hour } });
+    const row = { agentId: id, hour, action: "hold", confidence: 50, regime: "ranging", evidence: [], explanation: "Hold.", cashAfter: 100, qtyAfter: 0, markPrice: 2000, equityAfter: 100, holdingEquityAfter: 100, basisAfter: 100, candleSource: "binance:ETHUSDT", candleTime: new Date(hour.getTime() - HOUR_MS) };
+    await prisma.decision.create({ data: { ...row, guard: [{ check: "Fresh data", pass: false, detail: "The latest candle closed at 07:00 UTC, 3 hours before this run. Waiting for fresh data." }], execError: "the vault is paused" } });
+    expect(await health()).toMatchObject({ ok: false, missedHours: 0, staleAgents: 1, live: { failedOrders: 1 } });
+    await prisma.decision.update({ where: { agentId_hour: { agentId: id, hour } }, data: { guard: [{ check: "Fresh data", pass: true, detail: "The hourly candle to 10:00 UTC is in." }] } });
+    // A refusal by a vault's own settings is reported, but it is the owner's doing and not a fault of the service.
+    expect(await health()).toMatchObject({ ok: true, staleAgents: 0, live: { failedOrders: 1 } });
+  });
+
+  it("does not launch an agent whose size per trade is over the wallet's cap, which would never trade", async () => {
+    const s = await withVault();
+    await prisma.user.update({ where: { id: s.user.id }, data: { maxSizePct: 10 } }); // lowered after the backtest; the plan uses 20%
+    for (const mode of ["paper", "live"]) {
+      const res = await s.launch({ mode });
+      expect(res.statusCode, mode).toBe(409);
+      expect(res.json()).toMatchObject({ error: "size_over_cap", message: expect.stringMatching(/uses 20% of cash per trade, over your 10% cap/) });
+    }
+    expect(await prisma.agent.count()).toBe(0);
   });
 
   it("never adds virtual and real money together, and divides each hour by the base it had", async () => {

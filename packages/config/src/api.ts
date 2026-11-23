@@ -242,6 +242,20 @@ export interface HealthDTO {
   missedHours: number;
   /** Decisions made after the fact by catch-up. */
   lateDecisions: number;
+  /**
+   * Active agents whose decision for the latest hour could not be made on fresh market data. While that lasts no
+   * stop or target is acted on, so it counts as a problem.
+   */
+  staleAgents: number;
+  /** Present while live trading is configured on this server. */
+  live?: {
+    /** Live orders that did not go through in the last three hours (a refusal by a vault's own settings counts too). */
+    failedOrders: number;
+    /** ETH the agent's key holds for network fees; null when the chain could not be asked. */
+    operatorEth: number | null;
+    /** That is under the level at which trades may stop going through. Counts as a problem. */
+    operatorLow: boolean;
+  };
 }
 
 export interface ApiError {

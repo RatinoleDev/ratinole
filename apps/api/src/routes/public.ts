@@ -212,6 +212,31 @@ export function publicRoutes(app: FastifyInstance, deps: ApiDeps) {
     }
     const lateDecisions = await deps.prisma.decision.count({ where: { late: true, agent: { status: "active" } } });
     const beatOk = !!heartbeat && now() - new Date(heartbeat).getTime() < 2 * 60_000;
-    return { ok: beatOk && missedHours === 0, engine: { lastHeartbeat: heartbeat, lastTick }, activeAgents: agents.length, missedHours, lateDecisions };
+    // Decisions of the latest hour that could not be made on fresh data. An agent in that state acts on no stop.
+    const staleAgents = await deps.prisma.decision.count({
+      where: { hour: lastDue, agentId: { in: agents.map((a) => a.id) }, guard: { array_contains: [{ check: "Fresh data", pass: false }] } },
+    });
+    let live: HealthDTO["live"];
+    if (deps.vaults && liveRuns) {
+      const failedOrders = await deps.prisma.decision.count({ where: { execError: { not: null }, hour: { gte: new Date(lastDue.getTime() - 2 * HOUR_MS) }, agent: { mode: "live" } } });
+      // Asked at most every two minutes, and never for longer than three seconds: this endpoint is polled.
+      let operatorEth: number | null = null;
+      const cached = await deps.redis.get("live:operatorEth").catch(() => null);
+      if (cached != null && Number.isFinite(Number(cached))) operatorEth = Number(cached);
+      else {
+        operatorEth = await Promise.race([deps.vaults.operatorEth().catch(() => null), new Promise<null>((done) => setTimeout(() => done(null), 3000))]);
+        if (operatorEth != null) await deps.redis.set("live:operatorEth", String(operatorEth), "EX", 120).catch(() => undefined);
+      }
+      live = { failedOrders, operatorEth, operatorLow: operatorEth != null && operatorEth < LIVE.minOperatorEth };
+    }
+    return {
+      ok: beatOk && missedHours === 0 && staleAgents === 0 && !live?.operatorLow,
+      engine: { lastHeartbeat: heartbeat, lastTick },
+      activeAgents: agents.length,
+      missedHours,
+      lateDecisions,
+      staleAgents,
+      ...(live ? { live } : {}),
+    };
   });
 }

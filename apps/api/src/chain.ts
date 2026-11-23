@@ -28,6 +28,8 @@ export interface VaultReader {
   factory: Address;
   /** The operator the factory gives new vaults: the engine's address. */
   defaultOperator(): Promise<Address>;
+  /** ETH that address holds, for network fees. */
+  operatorEth(): Promise<number>;
   /** The wallet's vault, or null when it has none. */
   vaultOf(owner: string): Promise<Address | null>;
   read(vault: Address, market: MarketId): Promise<VaultInfo>;
@@ -65,6 +67,10 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
   return {
     factory: lower(opts.factory),
     defaultOperator: async () => lower(await pub.readContract({ ...factory, functionName: "defaultOperator" })),
+    async operatorEth() {
+      const operator = await pub.readContract({ ...factory, functionName: "defaultOperator" });
+      return fromUnits(await pub.getBalance({ address: operator }), 18);
+    },
     async vaultOf(owner) {
       const v = await pub.readContract({ ...factory, functionName: "vaultOf", args: [owner as Address] });
       return v === zeroAddress ? null : lower(v);

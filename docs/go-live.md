@@ -154,6 +154,11 @@ script stops at anything it does not recognise: a misspelt option, or a word too
 
 - **The agent's fee money.** `node scripts/go-live.mjs status` shows how much ETH the operator address holds.
   If it runs out, orders stop going through and decisions say so. Top it up.
+- **Alerts.** `scripts/healthcheck.sh` (set up with Telegram in docs/deploy.md) reports a problem when the
+  engine stops, when agents miss hours, when agents decide without fresh price data (no stop loss is acted on
+  while that lasts), and when the agent's key holds less than 0.0005 ETH. Set it up before you open: without
+  it nobody is told. The same numbers are at `/api/health`, with the count of live orders that did not go
+  through in the last three hours.
 - **The chain connection.** The server and visitors' browsers read the chain through the public RPC, which is
   rate-limited. Before real volume, get a dedicated endpoint: `LIVE_RPC_URL` in `.env` for the server, and
   `NEXT_PUBLIC_CHAIN_RPC_URL` set when the website is built for the browser.

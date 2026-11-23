@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Checks /api/health. Exit 0 = ok, 1 = problem reported (engine heartbeat stale
-# or missed hours), 2 = cannot reach it. Run every few minutes from cron.
+# Checks /api/health. Exit 0 = ok, 1 = problem reported, 2 = cannot reach it.
+# Run every few minutes from cron. A problem is any of: the engine's heartbeat
+# is stale; agents missed hours; agents decided without fresh price data (no
+# stop is acted on meanwhile); with live trading on, the agent's key is low on
+# ETH for network fees. The message carries the numbers.
 #
 # Alerts are sent only when the state changes (problem starts, problem clears),
 # so a long outage does not send a message every run. Channels, all optional:

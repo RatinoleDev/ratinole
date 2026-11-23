@@ -257,6 +257,11 @@ export default function StudioPage() {
               </p>
               <ul>
                 <li>A vault runs one live agent at a time.</li>
+                <li>
+                  It decides once an hour. A stop loss or take profit is checked at that moment, not in between, so in a fast market a position can be sold
+                  well past its stop.
+                </li>
+                <li>If the price data is late or a trade is refused, it waits and says why. It does not trade late.</li>
                 <li>You can pause the agent, pause the vault, or withdraw at any time.</li>
               </ul>
               <label className="agree">

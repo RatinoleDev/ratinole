@@ -54,6 +54,8 @@ export const LIVE = {
    * slippage limit against the oracle still applies on top.
    */
   maxDriftBps: 50,
+  /** Under this much ETH on the agent's key the health check reports a problem: every trade pays a network fee from it. */
+  minOperatorEth: 0.0005,
   /** Limits suggested when a vault is created. The owner can change both at any time. */
   defaults: { maxSlippageBps: 100, dailyLimitUsd: 200 },
   /** Hard bounds the vault contract accepts for slippage, in basis points. */
