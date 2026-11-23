@@ -8,6 +8,7 @@ import {
   decide,
   initialState,
   requiredWarmup,
+  staysOpen,
   type AgentParams,
   type Candle,
   type ExitKind,
@@ -74,7 +75,8 @@ export function toState(s: {
     avgEntry: s.avgEntry,
     peak: s.peak,
     peakSeenTo: s.peakSeenTo ? s.peakSeenTo.getTime() : null,
-    exitPending: s.exitPendingSince && isExitKind(s.exitPendingKind) ? { since: s.exitPendingSince.getTime(), kind: s.exitPendingKind } : null,
+    // Only an exit of a kind that stays open is read back as one.
+    exitPending: s.exitPendingSince && isExitKind(s.exitPendingKind) && staysOpen(s.exitPendingKind) ? { since: s.exitPendingSince.getTime(), kind: s.exitPendingKind } : null,
     lastBuyAt: s.lastBuyAt ? s.lastBuyAt.getTime() : null,
     dayStart: s.dayStart.getTime(),
     dayStartEquity: s.dayStartEquity,

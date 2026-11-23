@@ -186,6 +186,24 @@ describe("a take profit sells at its target or above, never below", () => {
     expect(next.decision.explanation).toBe("Hold. In position at −3.0% since buying. Take profit at +8%, stop at −10%.");
   });
 
+  it("while a stop is still open, a refused take profit says the agent tries again, because it will", () => {
+    const state = inPosition(h1.hour, entry, 1, { exitPending: { since: h1.hour - 3 * HOUR_MS, kind: "stop loss" } });
+    const refused = decide(ctx(), { candles: first, hour: h1.hour, state, fillPrice: h1.fillPrice, liveFill: REFUSED });
+    // The stop stays open with the hour it was first reached, and the text does not promise to wait for the target.
+    expect(refused.state.exitPending).toEqual({ since: h1.hour - 3 * HOUR_MS, kind: "stop loss" });
+    expect(refused.decision.explanation).toBe(
+      "Hold. Take profit reached: +9.0% since buying, target +8%, but the position was not sold: the vault is paused. It is still open, and the agent tries again next hour.",
+    );
+  });
+
+  it("a record that says a take profit is open is not read as an order to sell", () => {
+    // Such a row can only come from an earlier version. Under the target, it must not sell.
+    const state = inPosition(h2.hour, entry, 1, { exitPending: { since: h1.hour, kind: "take profit" } });
+    const out = decide(ctx({ exit: { takeProfitPct: 8, stopLossPct: 10 } }), { candles: all, hour: h2.hour, state, fillPrice: h2.fillPrice });
+    expect(out.decision.action).toBe("hold");
+    expect(out.state.exitPending).toBeNull();
+  });
+
   it("after a sale of part of the position at the target, the rest waits for the target, and the text says so", () => {
     const part: LiveFill = { ok: true, side: "sell", qty: 0.4, notional: h1.close * 0.4, fee: 0, note: "The vault's daily trading limit allowed only part of the position to be sold." };
     const out = decide(ctx(), { candles: first, hour: h1.hour, state: inPosition(h1.hour, entry), fillPrice: h1.fillPrice, liveFill: part });

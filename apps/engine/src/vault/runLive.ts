@@ -18,6 +18,7 @@ import {
   decide,
   equityOf,
   hasExit,
+  openExit,
   qtyText,
   requiredWarmup,
   settleBuy,
@@ -26,6 +27,7 @@ import {
   usd,
   type AgentParams,
   type Candle,
+  type ExitKind,
   type LiveFill,
   type Plan,
   type PositionState,
@@ -209,7 +211,39 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     }
   }
 
-  const snap = await chain.snapshot(vault, token, outcome?.ok && outcome.block > 0n ? outcome.block : undefined);
+  const ctx = {
+    agentId,
+    plan,
+    params,
+    limits: { maxSizePct: agent.maxSizePct, dailyLossCapPct: agent.dailyLossCapPct },
+    costPct: LIVE.costPct,
+    market: agent.market,
+    sources: funding.size && deps.funding ? { funding: deps.funding.label } : undefined,
+  };
+  const before = toState(stored);
+  /**
+   * Puts a stop or an exit rule the agent wanted to act on, and could not, on the record. If every retry of the
+   * hour ends the same way there is no decision to carry it, and next hour it must still be an order to sell.
+   * An exit already open keeps the hour it was first reached.
+   */
+  const rememberExit = async (kind: ExitKind | null, held: PositionState) => {
+    if (!kind || !staysOpen(kind)) return;
+    const open = openExit(held, hour);
+    await prisma.agentState.updateMany({ where: { agentId }, data: { exitPendingSince: new Date(open?.since ?? hour), exitPendingKind: open?.kind ?? kind } });
+  };
+
+  let snap: Awaited<ReturnType<VaultChain["snapshot"]>>;
+  try {
+    snap = await chain.snapshot(vault, token, outcome?.ok && outcome.block > 0n ? outcome.block : undefined);
+  } catch (err) {
+    // The vault could not be read, so nothing can be placed this hour. Whether a stop has been reached does not
+    // depend on the chain, only on the prices and on what the position cost: it is worked out from the position
+    // on record, and kept.
+    if (!order && !booking && before.qty > 0 && !(err instanceof OrderPendingError)) {
+      await rememberExit(decide(ctx, { candles, hour, state: before, fillPrice }).exitKind, before);
+    }
+    throw err;
+  }
   // Reasons this vault may not be traded any more. With no order to book, the agent simply stops here.
   const stop =
     snap.owner !== lower(agent.user.address)
@@ -229,7 +263,10 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
       stableRaw += outcome.amountIn;
       tokenRaw -= outcome.amountOut;
     } else {
-      tokenRaw += outcome.amountIn;
+      // A sale that was not cut short (it carries no note) sold everything the vault held. Tokens that are there
+      // now arrived after it. They are not the rest of this hour's position: next hour looks at them the way it
+      // looks at any tokens an agent with no position finds in its vault.
+      tokenRaw = order.note ? tokenRaw + outcome.amountIn : outcome.amountIn;
       stableRaw -= outcome.amountOut;
     }
   }
@@ -238,7 +275,6 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   if (tokenRaw < 0n) tokenRaw = 0n;
   let cash = fromUnits(stableRaw, LIVE_STABLE.decimals);
   const held = fromUnits(tokenRaw, token.decimals);
-  const before = toState(stored);
   // What counts as the agent's position:
   //  - It has one on record: whatever of the token is in the vault now, unless so little is left that it could
   //    not be sold. (The owner may have added to it or taken from it; that is a flow, below.)
@@ -305,15 +341,6 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     dayStartEquity: before.dayStartEquity * scale,
   };
 
-  const ctx = {
-    agentId,
-    plan,
-    params,
-    limits: { maxSizePct: agent.maxSizePct, dailyLossCapPct: agent.dailyLossCapPct },
-    costPct: LIVE.costPct,
-    market: agent.market,
-    sources: funding.size && deps.funding ? { funding: deps.funding.label } : undefined,
-  };
   const want = decide(ctx, { candles, hour, state, fillPrice });
 
   if (want.fill && !order) {
@@ -400,12 +427,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
           // The chain could not be reached before anything was signed. Nothing happened: take the unsigned order
           // back, and let the retry place it afresh.
           await prisma.liveOrder.deleteMany({ where: { id: orderId, status: "pending", txHash: null } });
-          // If every retry of this hour ends here, the hour has no decision to carry what the agent wanted. A stop
-          // or an exit rule that was reached is therefore put on the record now: next hour it is still an order
-          // to sell, whatever the price has done.
-          if (!buying && want.exitKind && staysOpen(want.exitKind)) {
-            await prisma.agentState.updateMany({ where: { agentId, exitPendingSince: null }, data: { exitPendingSince: new Date(hour), exitPendingKind: want.exitKind } });
-          }
+          if (!buying) await rememberExit(want.exitKind, state);
           throw err;
         }
       }
@@ -443,20 +465,12 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
       booked = { ...booked, peakSeenTo: hour - HOUR_MS };
       if (note) tail = ` ${note}`;
     } else if (booked.qty > 0) {
-      // Tokens are left after the sale. Either the sale was cut short (it sold less than the position on record),
-      // or it sold all of it and what is here now came into the vault afterwards.
+      // Tokens are left, so the sale was cut short by the daily limit (a whole sale is booked against exactly what
+      // it sold, above). The exit that asked for it decides what happens to the rest, as in any other hour.
       const kind = isExitKind(order?.exitKind) ? order.exitKind : null;
-      if (liveFill.qty < before.qty * (1 - 1e-9)) {
-        // Cut short. The exit that asked for the sale decides what happens to the rest, as in any other hour.
-        const open = kind != null && staysOpen(kind);
-        if (open) booked = { ...booked, exitPending: state.exitPending ?? { since: hour, kind } };
-        tail = ` ${qtyText(booked.qty)} ${agent.market} is still held.${note ? ` ${note}` : ""}${open ? " The agent tries to sell the rest every hour." : kind === "take profit" ? " The rest is sold in the next hour the target is still reached." : ""}`;
-      } else {
-        // The whole position was sold. What the vault holds now is not the rest of it: the owner added it since.
-        // It is a new position, counted as bought at this hour's price, with no exit open.
-        booked = { ...booked, avgEntry: mark, peak: mark, peakSeenTo: hour - HOUR_MS, exitPending: null };
-        tail = ` ${qtyText(booked.qty)} ${agent.market} that came into the vault since is now held.`;
-      }
+      const keep = openExit(state, hour) ?? (kind != null && staysOpen(kind) ? { since: hour, kind } : null);
+      booked = { ...booked, exitPending: keep };
+      tail = ` ${qtyText(booked.qty)} ${agent.market} is still held.${note ? ` ${note}` : ""}${keep ? " The agent tries to sell the rest every hour." : kind === "take profit" ? " The rest is sold in the next hour the target is still reached." : ""}`;
     }
     const what = liveFill.side === "buy" ? `Bought ${usd(res.fill.notional)} of ${agent.market} at ${usd(res.fill.price)}` : `Sold ${qtyText(res.fill.qty)} ${agent.market} at ${usd(res.fill.price)}`;
     out = {

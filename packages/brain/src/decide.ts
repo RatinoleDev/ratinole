@@ -18,7 +18,7 @@ import {
 } from "./evidence";
 import { explain, usd, type Situation } from "./explain";
 import { runGuard, vetoes } from "./guard";
-import { OPEN_EXIT_HOURS, applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, staysOpen, type ExitKind, type Fill, type LiveFill, type PositionState } from "./paper";
+import { applyBuy, applySell, equityOf, openExit, rollDay, settleBuy, settleSell, staysOpen, type ExitKind, type Fill, type LiveFill, type PositionState } from "./paper";
 import { classifyRegime, type RegimeParams } from "./regime";
 import { SeriesSource, formatSignalValue, type SignalId } from "./signals";
 import { HOUR_MS, type Action, type Candle, type Decision, type EvidenceItem, type Filter, type GuardCheck, type Plan } from "./types";
@@ -177,7 +177,7 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     else for (let j = i; j >= 0 && src.candles[j]!.t > seen; j--) peak = Math.max(peak, src.candles[j]!.c);
     state = { ...state, peak, peakSeenTo: Math.max(seen ?? candle.t, candle.t) };
     // An exit left open too long ago lapses: from here on the exits are checked against today's prices again.
-    if (state.exitPending && hour - state.exitPending.since > OPEN_EXIT_HOURS * HOUR_MS) state = { ...state, exitPending: null };
+    if (state.exitPending && !openExit(state, hour)) state = { ...state, exitPending: null };
   }
 
   const reading = classifyRegime(src, i, ctx.regimeParams);
@@ -316,13 +316,14 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     } else if (reason && kind) {
       exitKind = kind;
       // A stop or an exit rule that was reached stays an order to sell. A take profit does not: it sells at its
-      // target or above, so it is simply checked again next hour.
-      const open = staysOpen(kind);
+      // target or above, so it is simply checked again next hour. An exit already open from an earlier hour
+      // stays open whichever exit asks for the sale now.
+      const keep = pending ?? (staysOpen(kind) ? { since: hour, kind } : null);
       const live = inp.liveFill;
       if (live && !live.ok) {
         // Nothing was sold.
-        if (open) state = { ...state, exitPending: pending ?? { since: hour, kind } };
-        situation = { type: "not_sold", reason, why: live.reason, stillTrying, retry: open };
+        state = { ...state, exitPending: keep };
+        situation = { type: "not_sold", reason, why: live.reason, stillTrying, retry: keep != null };
       } else {
         if (live && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
         // A sale of part of the position is measured against the cost of that part.
@@ -333,11 +334,11 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
           const realizedPct = ((res.fill.notional - res.fill.fee) / costBasis - 1) * 100;
           state = res.state;
           // Only part of it could be sold.
-          if (state.qty > 0 && open) state = { ...state, exitPending: pending ?? { since: hour, kind } };
+          if (state.qty > 0) state = { ...state, exitPending: keep };
           fill = res.fill;
           action = "sell";
           confidence = sellConf;
-          situation = { type: "exited", reason, fill: res.fill, realizedPct, rest: state.qty > 0 ? { qty: state.qty, retry: open } : undefined, note: live?.note };
+          situation = { type: "exited", reason, fill: res.fill, realizedPct, rest: state.qty > 0 ? { qty: state.qty, retry: keep != null } : undefined, note: live?.note };
         }
       }
     } else if (dcaDue && allEntryHold) {

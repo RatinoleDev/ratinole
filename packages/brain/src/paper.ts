@@ -35,6 +35,14 @@ export interface PositionState {
 export const OPEN_EXIT_HOURS = 48;
 /** A take profit sells at its target or above, never below. The other exits, once reached, stay orders to sell. */
 export const staysOpen = (kind: ExitKind): boolean => kind !== "take profit";
+/**
+ * The exit that is open on a position at `hour`, if any: one of a kind that stays open, reached no longer ago
+ * than OPEN_EXIT_HOURS. Everything that asks "is there still an order to sell?" asks here.
+ */
+export function openExit(s: Pick<PositionState, "exitPending">, hour: number): ExitPending | null {
+  const p = s.exitPending;
+  return p && staysOpen(p.kind) && hour - p.since <= OPEN_EXIT_HOURS * HOUR_MS ? p : null;
+}
 
 export type ExitKind = "take profit" | "stop loss" | "trailing stop" | "exit rule";
 export interface ExitPending {
