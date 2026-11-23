@@ -8,7 +8,7 @@
     "build": "hardhat compile",
     "test": "hardhat test",
     "test:fuzz": "cross-env FUZZ_RUNS=2000 hardhat test test/fuzz.test.js",
-    "test:fork": "cross-env FORK=1 hardhat test test/fork.test.js test/rehearsal.fork.test.js",
+    "test:fork": "cross-env FORK=1 hardhat test test/fork.test.js test/rehearsal.fork.test.js test/meme.fork.test.js",
     "check": "hardhat run scripts/check-config.js --network robinhood"
   },
   "devDependencies": {

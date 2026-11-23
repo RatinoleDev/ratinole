@@ -6,6 +6,11 @@
   "router": "0xcaf681a66d020601342297493863e78c959e5cb2",
   "stable": "USDG",
   "vaultTokens": ["USDG", "WETH", "cbBTC"],
+  "pons": {
+    "factory": "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e",
+    "hook": "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044",
+    "poolManager": "0x8366a39CC670B4001A1121B8F6A443A643e40951"
+  },
   "tokens": [
     {
       "symbol": "USDG",
@@ -127,6 +132,7 @@
     "USDG": "https://docs.paxos.com/guides/stablecoin/usdg/mainnet",
     "WETH_cbBTC": "GeckoTerminal Uniswap V3 pool data (USDG/WETH 0.01%, cbBTC/USDG 0.05%) — verified on-chain by scripts/check-config.js",
     "stockTokens": "https://api.robinhood.com/rhj/assets (Robinhood Stock Token registry); feeds from the Chainlink directory above (24/5 US equities, prices include the corporate-action multiplier)",
-    "stockPools": "Uniswap V3 <stock>/USDG pools, deepest fee tier per token chosen from on-chain pool balances (2026-11-13)"
+    "stockPools": "Uniswap V3 <stock>/USDG pools, deepest fee tier per token chosen from on-chain pool balances (2026-11-13)",
+    "pons": "https://docs.ponsfamily.com/llms.txt and /v2 (pons v2 launch factory and meme hook, read 2026-11-23); the Uniswap v4 PoolManager is what that factory's poolManager() returns"
   }
 }

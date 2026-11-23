@@ -5,7 +5,9 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.join(__dirname, "..");
-const read = (name) => JSON.parse(fs.readFileSync(path.join(root, "artifacts", "contracts", `${name}.sol`, `${name}.json`), "utf8")).abi;
+const read = (name, dir = "") => JSON.parse(fs.readFileSync(path.join(root, "artifacts", "contracts", dir, `${name}.sol`, `${name}.json`), "utf8")).abi;
+/** One interface out of a file that holds several. */
+const readFrom = (file, name, dir = "") => JSON.parse(fs.readFileSync(path.join(root, "artifacts", "contracts", dir, `${file}.sol`, `${name}.json`), "utf8")).abi;
 
 const ERC20 = [
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
@@ -30,6 +32,15 @@ export const FACTORY_ABI = ${JSON.stringify(read("AgentVaultFactory"))} as const
 export const REGISTRY_ABI = ${JSON.stringify(read("DecisionRegistry"))} as const;
 
 export const ERC20_ABI = ${JSON.stringify(ERC20)} as const;
+
+export const MEME_VAULT_ABI = ${JSON.stringify(read("MemeVault", "meme"))} as const;
+
+export const MEME_FACTORY_ABI = ${JSON.stringify(read("MemeVaultFactory", "meme"))} as const;
+
+export const MEME_VENUE_ABI = ${JSON.stringify(read("IMemeVenue", "meme"))} as const;
+
+/** The pons v2 launch factory: the one function the app reads, the record of a launch. */
+export const PONS_FACTORY_ABI = ${JSON.stringify(readFrom("PonsVenue", "IPonsFactory", "meme").filter((f) => f.name === "getLaunchedToken"))} as const;
 `;
 fs.writeFileSync(path.join(root, "..", "packages", "config", "src", "abi.ts"), out);
 console.log("wrote packages/config/src/abi.ts");
