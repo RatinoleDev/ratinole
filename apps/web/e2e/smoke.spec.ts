@@ -106,10 +106,10 @@ test("has icons, link previews, robots, sitemap and legal pages", async ({ page,
   await expect(page.getByRole("link", { name: "Ratinole on X" })).toHaveAttribute("href", "https://x.com/RatinoleHQ");
   await expect(page.getByRole("link", { name: "Ratinole on Telegram" })).toHaveAttribute("href", "https://t.me/ratinole");
   await expect(page.getByRole("link", { name: "Join the Telegram" })).toHaveAttribute("href", "https://t.me/ratinole");
-  // The token's address is shown whole, with a link to the explorer and a line saying what the token is not.
+  // The token's address is shown whole, with a link to its page on the launchpad and a line saying what the token is not.
   const token = page.getByRole("region", { name: "The $RATINOLE token" });
   await expect(token.getByText("0xcEc856b8a7f6946d4E589F400678D9CC43455d58", { exact: true })).toBeVisible();
-  await expect(token.getByRole("link", { name: "View on the explorer" })).toHaveAttribute("href", "https://robinhoodchain.blockscout.com/token/0xcEc856b8a7f6946d4E589F400678D9CC43455d58");
+  await expect(token.getByRole("link", { name: "View on Pons" })).toHaveAttribute("href", "https://ponsfamily.com/launchpad/0xcec856b8a7f6946d4e589f400678d9cc43455d58");
   await expect(token.getByText(/\$RATINOLE is not needed to use Ratinole and is not a claim on profit\. Crypto is risky: you can lose all you put in\./)).toBeVisible();
   // The source code is public, and the site links to it from the header and the footer.
   await expect(page.getByRole("link", { name: "Ratinole source code on GitHub" })).toHaveAttribute("href", "https://github.com/RatinoleDev/ratinole");

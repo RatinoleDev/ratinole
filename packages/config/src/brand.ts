@@ -19,6 +19,12 @@ export const GITHUB_URL = "https://github.com/RatinoleDev/ratinole";
  * the token: it is not needed to trade and gives no claim on anything, and the site says so wherever it shows the
  * address. An empty address shows nothing about a token.
  */
-export const TOKEN = { ticker: "RATINOLE", address: "0xcEc856b8a7f6946d4E589F400678D9CC43455d58" } as const;
+export const TOKEN = {
+  ticker: "RATINOLE",
+  address: "0xcEc856b8a7f6946d4E589F400678D9CC43455d58",
+  /** The token's own page on Pons, the launchpad it was launched on. The owner's choice of where the site links to. */
+  pageUrl: "https://ponsfamily.com/launchpad/0xcec856b8a7f6946d4e589f400678d9cc43455d58",
+  pageName: "Pons",
+} as const;
 /** Shown on the legal pages. Empty until the owner chooses a public contact address. */
 export const CONTACT_EMAIL = "";

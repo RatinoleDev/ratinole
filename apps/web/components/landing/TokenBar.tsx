@@ -2,14 +2,12 @@
 
 /**
  * The token's contract address, in the one place people are told to look for it. Copying it by hand from a post is
- * how people end up with a fake: here it is shown whole, can be copied in one click, and links to the explorer.
+ * how people end up with a fake: here it is shown whole, can be copied in one click, and links to its own page
+ * on the launchpad it was launched on.
  * The line under it says what the token is not, because the app does not use it.
  */
-import { BRAND_NAME, CHAIN, TOKEN } from "@rationale/config";
+import { BRAND_NAME, TOKEN } from "@rationale/config";
 import { useState } from "react";
-
-export const tokenExplorerUrl = () =>
-  `${CHAIN.explorerUrl}/token/${TOKEN.address}`;
 
 export function TokenBar() {
   const [copied, setCopied] = useState<"" | "yes" | "no">("");
@@ -50,11 +48,11 @@ export function TokenBar() {
             </button>
             <a
               className="tokenlink"
-              href={tokenExplorerUrl()}
+              href={TOKEN.pageUrl}
               target="_blank"
               rel="noopener noreferrer"
             >
-              View on the explorer
+              View on {TOKEN.pageName}
             </a>
           </div>
           <p className="tokennote">
