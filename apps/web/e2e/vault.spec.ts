@@ -513,7 +513,7 @@ test.describe("vault page", () => {
     await expect(restore).toBeEnabled();
     await vault.locator('input[type="range"]').first().focus();
     await page.keyboard.press("ArrowRight");
-    await expect(vault.getByText("Daily trading limit $250")).toBeVisible();
+    await expect(vault.getByText("Daily trading limit $210")).toBeVisible();
     await expect(save).toBeEnabled();
 
     // The page's own connection to the chain fails; the wallet's still works.

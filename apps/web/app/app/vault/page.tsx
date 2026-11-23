@@ -74,7 +74,7 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
         <span>
           Daily trading limit <b className="num">${limit.toLocaleString("en-US")}</b>
         </span>
-        <input type="range" min={50} max={5000} step={50} value={Math.min(5000, Math.max(50, limit))} onChange={(e) => setLimit(Number(e.target.value))} disabled={disabled} />
+        <input type="range" min={10} max={5000} step={10} value={Math.min(5000, Math.max(10, limit))} onChange={(e) => setLimit(Number(e.target.value))} disabled={disabled} />
       </label>
       <p className="hint" style={{ margin: 0 }}>
         Buys and sales both count towards it. An agent that has an exit rule never holds more than it could sell in one day: with nothing held, its largest
@@ -130,18 +130,16 @@ function VaultPreview() {
   );
 }
 
-function RiskNote({ cap, trading }: { cap: number | null; trading: boolean }) {
-  if (!trading) {
-    return (
-      <p className="risknote" role="note">
-        <b>Live trading is paused.</b> No agent is trading right now. Your vault is still yours: you can see it and withdraw from it at any time.
-      </p>
-    );
-  }
+/**
+ * Shown only while live trading is paused. While it is open the page carries no banner (the owner's choice): that
+ * the contracts are not audited and that money can be lost is said where a live agent is launched, and on the
+ * risk page.
+ */
+function RiskNote({ trading }: { trading: boolean }) {
+  if (trading) return null;
   return (
     <p className="risknote" role="note">
-      <b>Real money, beta.</b> The vault contracts have not had an independent security audit yet. Only deposit money you can afford to lose
-      {cap != null ? `; a live agent starts on at most $${cap.toLocaleString("en-US")}` : ""}. Backtests and past results do not predict future returns.
+      <b>Live trading is paused.</b> No agent is trading right now. Your vault is still yours: you can see it and withdraw from it at any time.
     </p>
   );
 }
@@ -638,7 +636,7 @@ function LiveVault({ chain, degraded }: { chain: ChainConfigDTO; degraded: boole
   const vault = vaultQ.data && vaultQ.data !== zeroAddress ? (vaultQ.data as Address) : null;
   return (
     <section>
-      <RiskNote cap={chain.limits.maxVaultUsd} trading={chain.trading} />
+      <RiskNote trading={chain.trading} />
       {limited && (
         <p className="risknote" role="status">
           <b>This site's server cannot be reached.</b>{" "}
