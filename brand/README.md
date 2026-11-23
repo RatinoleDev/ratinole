@@ -26,7 +26,7 @@ hour; the lime facet is the decision. Light falls from the top left.
 | `x/ratinole-x-x1-3d-1500x500.png` (+ `-3000x1000.jpg`) | X header with the 3D crystal and the headline, as on the website |
 | `x/ratinole-x-x2-black-1500x500.png` (+ `-3000x1000.jpg`) | X header on plain black: crystal and name |
 | `x/ratinole-x-x3-cinematic-1500x500.png` (+ `-3000x1000.jpg`) | X header with a large 3D crystal and the name |
-| `x/ratinole-x-article-intro-3000x1200.jpg` | Cover for the X article that introduces Ratinole (5:2): the robot, the tagline, ratinole.trade and @RatinoleHQ |
+| `x/ratinole-x-article-intro-3000x1200.jpg` (+ `-1500x600.jpg`) | Cover for the X article that introduces Ratinole (5:2): the robot, the tagline, ratinole.trade and @RatinoleHQ |
 | `social/ratinole-meet-1600x900.jpg` | "Meet Ratinole" post image, 16:9 (rendered at 2x) |
 | `social/ratinole-meet-1080x1350.jpg` | "Meet Ratinole" post image, 4:5 for the phone feed (rendered at 2x) |
 | `social/ratinole-how-it-works-1600x900.jpg` | "How it works" post image with the robot, 16:9 (rendered at 2x) |
