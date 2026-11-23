@@ -148,7 +148,11 @@ at the moment of the order, and a swap the vault's oracle disagrees with is refu
 
 1. **Profit fee.** "10% of profit above the high-water mark" needs a contract-level
    mechanism, because the operator cannot withdraw from a vault (HANDOFF section 6).
-2. **Token.** Whether there is one, what it does, and when.
+2. **Token.** The owner launched $RATINOLE on Robinhood Chain on 23 Nov 2026
+   (`0xcEc856b8a7f6946d4E589F400678D9CC43455d58`; the address is in
+   `packages/config/src/brand.ts` and on the landing page). It has no function in the
+   app or the contracts: it is not needed to trade and gives no claim on anything, and
+   the site says so next to the address. What it will do, if anything, is still open.
 3. **KMS provider** for the operator and poster keys.
 4. **Audit:** which firm, budget and timing.
 5. **Legal:** terms and risk pages for live trading, and the regulation that applies

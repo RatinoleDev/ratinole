@@ -13,5 +13,12 @@ export const X_URL = `https://x.com/${X_HANDLE}`;
 export const TELEGRAM_URL = "https://t.me/ratinole";
 /** The public source code: the app, the engine and the vault contracts. */
 export const GITHUB_URL = "https://github.com/RatinoleDev/ratinole";
+/**
+ * The project's token on Robinhood Chain, launched by the owner. The address was given by the owner and read back
+ * from the chain before it was put here (symbol RATINOLE, 18 decimals). The app and the vault contracts do not use
+ * the token: it is not needed to trade and gives no claim on anything, and the site says so wherever it shows the
+ * address. An empty address shows nothing about a token.
+ */
+export const TOKEN = { ticker: "RATINOLE", address: "0xcEc856b8a7f6946d4E589F400678D9CC43455d58" } as const;
 /** Shown on the legal pages. Empty until the owner chooses a public contact address. */
 export const CONTACT_EMAIL = "";

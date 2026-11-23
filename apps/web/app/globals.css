@@ -851,6 +851,15 @@ body:has(#landing){background:#070708}
 .xfollow{display:inline-flex;align-items:center;gap:8px;margin-top:14px;padding:7px 14px;border-radius:999px;font-size:14px;font-weight:600;text-decoration:none;color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
 .xfollow:hover{box-shadow:inset 0 0 0 1px var(--ink)}
 .fcols a.xfollow{display:inline-flex;padding:7px 14px;color:var(--ink)}
+/* The token's contract address: shown whole, never cut short, so it can be checked character by character. */
+#landing .tokenbar{padding:14px 0 0}
+.tokenbox{border-radius:18px;padding:14px 18px;background:linear-gradient(160deg,rgba(198,244,50,.09),rgba(255,255,255,.025));box-shadow:inset 0 0 0 1px rgba(198,244,50,.28)}
+.tokenrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.tokenname{font-family:var(--display);font-size:17px;font-weight:700;letter-spacing:-.01em;color:var(--lime)}
+.tokenlabel{font-size:13.5px;color:var(--ink3)}
+.tokenrow .ca{font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink);background:rgba(255,255,255,.06);padding:6px 10px;border-radius:9px;overflow-wrap:anywhere;user-select:all}
+.tokenlink{font-size:14px;font-weight:600;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.tokennote{margin:8px 0 0;font-size:13px;line-height:1.5;color:var(--ink3)}
 .fsocial{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .fsocial .xfollow{margin-top:0}
 /* On a phone the header has room for one round link and the main button. Telegram and GitHub stay in the footer. */

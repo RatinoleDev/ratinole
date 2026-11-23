@@ -2,6 +2,7 @@ import type { DecisionDTO, ExampleDTO, LeaderboardRowDTO, LiveTickDTO, MarketDTO
 import { Features } from "../components/landing/Live";
 import { LiveMarketBand } from "../components/landing/LiveMarket";
 import { RevealInit } from "../components/landing/Reveal";
+import { TokenBar } from "../components/landing/TokenBar";
 import {
   Closing,
   Compare,
@@ -35,6 +36,7 @@ export default async function Landing() {
       <RevealInit />
       <Nav />
       <LiveMarketBand markets={markets} initial={Array.isArray(live) ? live : []} />
+      <TokenBar />
       <Hero latest={latest} decisions={list} markets={markets} />
       <Product example={example} />
       <DecisionTape latest={latest} />
