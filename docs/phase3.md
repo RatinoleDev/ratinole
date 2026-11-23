@@ -84,7 +84,7 @@ value minus the vault's slippage limit, and the vault caps the value traded per
 per window, until the owner pauses the vault or revokes the operator (from NOUNY's
 SECURITY.md). The windows are fixed, not rolling: around the end of one, up to twice
 the limit can trade within a short time, so the bound for a single day is twice that
-figure. The default daily limit for a new vault is $200.
+figure. The Vault page suggests a daily limit of $500 for a new vault; the owner picks it.
 
 That bound holds while the price feeds keep up with the market, which is the normal
 case (Chainlink updates a feed when the price moves by its threshold). The vault
@@ -118,6 +118,22 @@ at the moment of the order, and a swap the vault's oracle disagrees with is refu
 - **The last round of fixes** (resuming after tokens were taken out, an emptied vault
   with an order on record, two readings of node errors) is covered by tests, but was
   not read again by an independent reviewer.
+- **Exits are checked once an hour, on the hourly close.** A stop is not a resting
+  order: a price that falls through it and comes back inside the hour is not seen, and
+  a fall straight through it is sold at the price of the next hour, not at the stop.
+- **An exit that is open stays open until it is sold or the agent is resumed.** If the
+  vault is paused on-chain for a week with a stop reached, the position is sold in the
+  first hour after it is unpaused, whatever the price is then.
+- **A position built by several scheduled buys** can be larger than the daily limit
+  has room for. Its exit is then sold over more than one 24-hour window.
+- **Tokens the owner adds to a position** are counted as bought at that hour's price
+  (the average entry moves), but the high the trailing stop follows does not: it stays
+  the high since the agent's own buy.
+- **When both price feeds are behind**, the agent waits and no exit is checked. Each
+  such decision says so. Binance (spot) and Hyperliquid (perpetual) prices differ a
+  little, so a trailing high can span the two when the feed changes.
+- **Explanations are written by template**, from the stored facts of each decision.
+  No language model writes them yet.
 
 ## Open decisions
 

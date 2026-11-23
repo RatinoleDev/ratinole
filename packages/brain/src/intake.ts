@@ -30,6 +30,38 @@ const GENERIC =
 
 const fail = (code: IntakeErrorCode, message: string): IntakeOutcome => ({ ok: false, code, message });
 
+/** The longest RSI lookback, in hours. A longer one needs more history than the agent reads each hour, so its RSI would differ from the backtest's. */
+export const MAX_RSI_WINDOW = 100;
+
+/**
+ * A number that is outside what a plan allows, named in plain words. The schema refuses the same plans; this
+ * says which number and what the limits are, instead of "I couldn't turn that into a plan".
+ */
+function rangeProblem(input: unknown): string | null {
+  const obj = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const plan = obj(input);
+  const exit = obj(plan.exit);
+
+  const size = plan.sizePctOfCash;
+  if (num(size) && (size < 1 || size > 100)) return `Size per trade must be between 1% and 100% of cash. You gave ${size}%.`;
+  const tp = exit.takeProfitPct;
+  if (num(tp) && (tp <= 0 || tp > 1000)) return `Take profit must be more than 0% and no more than 1,000%. You gave ${tp}%.`;
+  const sl = exit.stopLossPct;
+  if (num(sl) && (sl <= 0 || sl >= 100)) return `A stop loss must be more than 0% and less than 100%. You gave ${sl}%.`;
+  const trail = exit.trailingStopPct;
+  if (num(trail) && (trail <= 0 || trail >= 100)) return `A trailing stop must be more than 0% and less than 100%. You gave ${trail}%.`;
+
+  const conditions = [...(Array.isArray(plan.entry) ? plan.entry : []), ...(Array.isArray(exit.conditions) ? exit.conditions : [])].map(obj);
+  for (const c of conditions) {
+    const w = c.window;
+    if (!num(w) || !Number.isInteger(w)) continue;
+    if (w < 1 || w > 1000) return `A lookback must be between 1 and 1,000 hours. You gave ${w}.`;
+    if (c.signal === "rsi" && (w < 2 || w > MAX_RSI_WINDOW)) return `An RSI lookback must be between 2 and ${MAX_RSI_WINDOW} hours. You gave ${w}.`;
+  }
+  return null;
+}
+
 export async function intake(sentence: string, draft: PlanDrafter, opts: IntakeOptions): Promise<IntakeOutcome> {
   const s = sentence.trim();
   if (s.length < 8) return fail("rephrase", GENERIC);
@@ -95,6 +127,8 @@ export function draftToPlan(raw: unknown, opts: IntakeOptions): IntakeOutcome {
  * a sentence would.
  */
 export function checkPlan(input: unknown, opts: IntakeOptions): IntakeOutcome {
+  const outOfRange = rangeProblem(input);
+  if (outOfRange) return fail("rephrase", outOfRange);
   const parsed = PlanSchema.safeParse(input);
   if (!parsed.success) return fail("rephrase", GENERIC);
   const plan = parsed.data as Plan;
@@ -105,7 +139,7 @@ export function checkPlan(input: unknown, opts: IntakeOptions): IntakeOutcome {
   if (unsupported.length) {
     return fail(
       "unsupported_market",
-      `${unsupported.join(" and ")} ${unsupported.length > 1 ? "aren't" : "isn't"} available yet. Paper trading covers ${opts.supportedMarkets.join(" and ")} for now.`,
+      `${unsupported.join(" and ")} ${unsupported.length > 1 ? "aren't" : "isn't"} available yet. Agents trade ${opts.supportedMarkets.join(" and ")} for now.`,
     );
   }
 

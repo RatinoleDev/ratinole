@@ -62,6 +62,6 @@ describe("planChecks", () => {
     expect(planChecks(plan, 35).every((c) => c.pass)).toBe(true);
     const risky = planChecks({ ...plan, filters: [], sizePctOfCash: 50, exit: { takeProfitPct: 8 } }, 35);
     expect(risky.map((c) => c.pass)).toEqual([true, false, false, false]);
-    expect(risky[3]!.label).toBe("Risk per trade is 35% or less");
+    expect(risky[3]!.label).toBe("Size per trade is within your 35% cap");
   });
 });

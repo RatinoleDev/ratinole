@@ -4,7 +4,7 @@
  */
 import { SIGNALS, SIGNAL_IDS } from "./signals";
 
-export const INTAKE_PROMPT_VERSION = "intake-v1";
+export const INTAKE_PROMPT_VERSION = "intake-v2";
 
 export function buildIntakeSystemPrompt(): string {
   const signals = SIGNAL_IDS.map((id) => {
@@ -43,6 +43,8 @@ Rules:
 - "RSI crosses back above 30": {"signal":"rsi","op":"crosses_above","value":30}.
 - "price crosses back above its average": {"signal":"price_vs_sma_pct","op":"crosses_above","value":0}.
 - "whales buying" or "large wallets buying": {"signal":"wallet_net_flow_usd","op":">","value":0}. "negative funding": {"signal":"funding_rate","op":"<","value":0}.
+- An agent sells its whole position at once. If the sentence asks to sell in parts ("sell half at 8% and the rest at 12%"), set understood to false and problem to "An agent sells its whole position at once, so selling in parts isn't available."
+- Keep the lookback the user states even when it is long. The intake code checks its limits.
 - Percentages are plain numbers: 8% is 8.`;
 }
 

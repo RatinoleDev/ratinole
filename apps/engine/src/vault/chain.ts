@@ -168,7 +168,7 @@ export function refusalReason(err: unknown): string {
     if (/\bSTF\b/.test(revert.text)) return "the vault holds less than the order needed";
     return "the vault refused the order";
   }
-  if (err instanceof BaseError && (err.walk((e) => e instanceof InsufficientFundsError) || NO_GAS_MONEY.test(nodeWords(err)))) return "the agent's own wallet is out of gas money";
+  if (err instanceof BaseError && (err.walk((e) => e instanceof InsufficientFundsError) || NO_GAS_MONEY.test(nodeWords(err)))) return "the service's trading wallet could not pay the network fee";
   return "the network refused the order";
 }
 

@@ -22,6 +22,8 @@ export interface VaultInfo {
   otherUsd: number;
   /** One of those other tokens is in the vault and the oracle has no price for it: `otherUsd` is then too low. */
   otherUnpriced: boolean;
+  /** The most the vault lets its agent trade in one 24-hour window, buys and sales together, in dollars. */
+  dailyLimitUsd: number;
 }
 
 export interface VaultReader {
@@ -95,6 +97,8 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
             call(token.address, erc, "balanceOf", [vault]),
             call(vault, va, "priceUsd", [token.address]),
             ...others.flatMap((t) => [call(t.address, erc, "balanceOf", [vault]), call(vault, va, "priceUsd", [t.address])]),
+            // Last, so the positions above stay where they are.
+            call(vault, va, "dailyLimitUsd"),
           ],
         }),
       ]);
@@ -134,6 +138,7 @@ export function viemVaultReader(opts: { rpcUrl: string; factory: string }): Vaul
         },
         otherUsd,
         otherUnpriced,
+        dailyLimitUsd: fromUnits(must<bigint>(8 + 2 * others.length), 18),
       };
     },
   };

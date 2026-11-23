@@ -145,7 +145,7 @@ export default function StudioPage() {
       const code = e instanceof ApiFailure ? e.code : "";
       setLiveError({
         message: e instanceof Error ? e.message : "The live agent could not be started.",
-        vault: ["no_vault", "vault_empty", "vault_paused", "agent_access", "token_not_allowed", "beta_cap", "not_your_vault"].includes(code),
+        vault: ["no_vault", "vault_empty", "vault_paused", "agent_access", "token_not_allowed", "beta_cap", "not_your_vault", "limit_too_small", "order_too_small"].includes(code),
       });
     } finally {
       setLaunching(false);
@@ -261,7 +261,11 @@ export default function StudioPage() {
                   It decides once an hour. A stop loss or take profit is checked at that moment, not in between, so in a fast market a position can be sold
                   well past its stop.
                 </li>
-                <li>If the price data is late or a trade is refused, it waits and says why. It does not trade late.</li>
+                <li>
+                  If the price data is late or a trade is refused, it waits and says why. It does not trade late. A sale that could not be made is tried again
+                  every hour until the position is sold.
+                </li>
+                <li>Your vault's daily limit counts buys and sales together, so each buy is kept small enough for its sale to fit the same day.</li>
                 <li>You can pause the agent, pause the vault, or withdraw at any time.</li>
               </ul>
               <label className="agree">

@@ -136,7 +136,7 @@ export function Features({ board, example, decisions }: { board: LeaderboardRowD
             <h3>A guard that can veto</h3>
             <p>Size and daily loss caps, stale data and market stress. A veto always wins, and it never blocks an exit.</p>
             <div className="mini checks" aria-hidden="true">
-              {(latest ? latest.guard.slice(0, 3) : [{ check: "Fresh data", pass: true }, { check: "Position size", pass: true }, { check: "Daily loss", pass: true }]).map((g) => (
+              {(latest ? latest.guard.slice(0, 3) : [{ check: "Fresh data", pass: true }, { check: "Trade size", pass: true }, { check: "Daily loss", pass: true }]).map((g) => (
                 <div key={g.check}>
                   <i className={latest ? (g.pass ? "ok" : "bad") : "neutral"}>{latest ? (g.pass ? "Pass" : "Veto") : "Check"}</i>
                   {g.check}

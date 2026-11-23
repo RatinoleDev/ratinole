@@ -5,7 +5,7 @@
  * from the chain, and every change is a transaction the owner signs in their own wallet. The site holds no key.
  * Until live trading is open on this site, the page is a preview of how a vault works.
  */
-import { CHAIN, ERC20_ABI, FACTORY_ABI, VAULT_ABI, explorerAddress, fromUnits, parseAmount, type ChainConfigDTO } from "@rationale/config";
+import { CHAIN, ERC20_ABI, FACTORY_ABI, LIVE, VAULT_ABI, explorerAddress, fromUnits, parseAmount, type ChainConfigDTO } from "@rationale/config";
 import { useEffect, useMemo, useState } from "react";
 import { formatUnits, parseUnits, zeroAddress, type Abi, type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
@@ -76,6 +76,10 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
         </span>
         <input type="range" min={50} max={5000} step={50} value={Math.min(5000, Math.max(50, limit))} onChange={(e) => setLimit(Number(e.target.value))} disabled={disabled} />
       </label>
+      <p className="hint" style={{ margin: 0 }}>
+        Buys and sales both count towards it. An agent that has an exit rule keeps each buy under <b className="num">${Math.floor(limit / LIVE.exitRoomFactor).toLocaleString("en-US")}</b>,
+        so that it can always sell what it bought on the same day.
+      </p>
       <label>
         <span>
           Maximum slippage against the oracle <b className="num">{slip.toFixed(1)}%</b>
@@ -96,7 +100,7 @@ function LimitSliders({ limit, slip, setLimit, setSlip, disabled }: { limit: num
 
 /** Shown while live trading is not open: how a vault will work. */
 function VaultPreview() {
-  const [limit, setLimit] = useState(200);
+  const [limit, setLimit] = useState<number>(LIVE.defaults.dailyLimitUsd);
   const [slip, setSlip] = useState(1);
   const soon = "Vaults open with live trading";
   return (

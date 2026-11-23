@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkPlan, draftToPlan, intake, type IntakeOptions } from "../src/intake";
+import { MAX_RSI_WINDOW, checkPlan, draftToPlan, intake, type IntakeOptions } from "../src/intake";
 import { buildIntakeSystemPrompt, buildIntakeUserMessage } from "../src/prompt";
 import { DraftSchema } from "../src/schema";
 import { SIGNAL_IDS } from "../src/signals";
@@ -115,6 +115,73 @@ describe("draftToPlan", () => {
   it("rejects values outside a signal's range instead of guessing", () => {
     const out = draftToPlan(draft({ entry: [{ signal: "rsi", op: "<", value: 130, window: null }] }), opts);
     expect(out).toMatchObject({ ok: false, code: "rephrase" });
+  });
+});
+
+describe("numbers outside what a plan allows get a message that names them", () => {
+  const exit = (over: Record<string, unknown>) => draft({ exit: { takeProfitPct: 8, stopLossPct: 4, trailingStopPct: null, conditions: [], ...over } });
+  const refusal = (raw: unknown) => {
+    const out = draftToPlan(raw, opts);
+    return out.ok ? "ok" : `${out.code}: ${out.message}`;
+  };
+
+  it("size per trade under 1% or over 100%", () => {
+    expect(refusal(draft({ sizePctOfCash: 150 }))).toBe("rephrase: Size per trade must be between 1% and 100% of cash. You gave 150%.");
+    expect(refusal(draft({ sizePctOfCash: 0.5 }))).toBe("rephrase: Size per trade must be between 1% and 100% of cash. You gave 0.5%.");
+    expect(refusal(draft({ sizePctOfCash: 0 }))).toBe("rephrase: Size per trade must be between 1% and 100% of cash. You gave 0%.");
+    // Inside the range but over the wallet's cap is the cap's refusal, as before.
+    expect(draftToPlan(draft({ sizePctOfCash: 100 }), opts)).toMatchObject({ ok: false, code: "size_over_cap" });
+    expect(draftToPlan(draft({ sizePctOfCash: 1 }), opts)).toMatchObject({ ok: true, plan: { sizePctOfCash: 1 } });
+  });
+
+  it("take profit of 0 or less, or over 1,000%", () => {
+    expect(refusal(exit({ takeProfitPct: 0 }))).toBe("rephrase: Take profit must be more than 0% and no more than 1,000%. You gave 0%.");
+    expect(refusal(exit({ takeProfitPct: -3 }))).toBe("rephrase: Take profit must be more than 0% and no more than 1,000%. You gave -3%.");
+    expect(refusal(exit({ takeProfitPct: 1500 }))).toBe("rephrase: Take profit must be more than 0% and no more than 1,000%. You gave 1500%.");
+    expect(refusal(exit({ takeProfitPct: 1000 }))).toBe("ok");
+  });
+
+  it("stop loss of 0 or less, or 100% and more", () => {
+    expect(refusal(exit({ stopLossPct: 0 }))).toBe("rephrase: A stop loss must be more than 0% and less than 100%. You gave 0%.");
+    expect(refusal(exit({ stopLossPct: 100 }))).toBe("rephrase: A stop loss must be more than 0% and less than 100%. You gave 100%.");
+    expect(refusal(exit({ stopLossPct: 400 }))).toBe("rephrase: A stop loss must be more than 0% and less than 100%. You gave 400%.");
+    expect(refusal(exit({ stopLossPct: 99 }))).toBe("ok");
+  });
+
+  it("trailing stop of 0 or less, or 100% and more", () => {
+    expect(refusal(exit({ stopLossPct: null, trailingStopPct: 0 }))).toBe("rephrase: A trailing stop must be more than 0% and less than 100%. You gave 0%.");
+    expect(refusal(exit({ stopLossPct: null, trailingStopPct: 100 }))).toBe("rephrase: A trailing stop must be more than 0% and less than 100%. You gave 100%.");
+    expect(refusal(exit({ stopLossPct: null, trailingStopPct: 6 }))).toBe("ok");
+  });
+
+  it("an RSI lookback over 100 hours, in a buy rule or a sell rule", () => {
+    expect(MAX_RSI_WINDOW).toBe(100);
+    expect(refusal(draft({ entry: [{ signal: "rsi", op: "<", value: 30, window: 200 }] }))).toBe("rephrase: An RSI lookback must be between 2 and 100 hours. You gave 200.");
+    expect(refusal(draft({ entry: [{ signal: "rsi", op: "<", value: 30, window: 101 }] }))).toBe("rephrase: An RSI lookback must be between 2 and 100 hours. You gave 101.");
+    expect(refusal(draft({ entry: [{ signal: "rsi", op: "<", value: 30, window: 1 }] }))).toBe("rephrase: An RSI lookback must be between 2 and 100 hours. You gave 1.");
+    expect(refusal(exit({ conditions: [{ signal: "rsi", op: ">", value: 70, window: 150 }] }))).toBe("rephrase: An RSI lookback must be between 2 and 100 hours. You gave 150.");
+    const edge = draftToPlan(draft({ entry: [{ signal: "rsi", op: "<", value: 30, window: 100 }] }), opts);
+    expect(edge.ok && edge.plan.entry).toEqual([{ signal: "rsi", op: "<", value: 30, window: 100 }]);
+    // Only RSI has this limit: a 200-hour average is fine.
+    const trend = draftToPlan(draft({ entry: [{ signal: "trend_pct", op: ">", value: 0, window: 200 }] }), opts);
+    expect(trend.ok && trend.plan.entry).toEqual([{ signal: "trend_pct", op: ">", value: 0, window: 200 }]);
+  });
+
+  it("any lookback under 1 hour or over 1,000 hours", () => {
+    expect(refusal(draft({ entry: [{ signal: "price_vs_sma_pct", op: "<", value: -3, window: 5000 }] }))).toBe("rephrase: A lookback must be between 1 and 1,000 hours. You gave 5000.");
+    expect(refusal(draft({ entry: [{ signal: "change_pct", op: "<", value: -3, window: 0 }] }))).toBe("rephrase: A lookback must be between 1 and 1,000 hours. You gave 0.");
+  });
+
+  it("a plan sent back by the browser gets the same messages", () => {
+    const plan = { markets: ["ETH"], kind: "entry_exit", entry: [{ signal: "rsi", op: "<", value: 30 }], exit: { stopLossPct: 4 }, filters: [], sizePctOfCash: 20 };
+    expect(checkPlan({ ...plan, sizePctOfCash: 150 }, opts)).toEqual({ ok: false, code: "rephrase", message: "Size per trade must be between 1% and 100% of cash. You gave 150%." });
+    expect(checkPlan({ ...plan, exit: { stopLossPct: 400 } }, opts)).toEqual({ ok: false, code: "rephrase", message: "A stop loss must be more than 0% and less than 100%. You gave 400%." });
+    expect(checkPlan({ ...plan, entry: [{ signal: "rsi", op: "<", value: 30, window: 240 }] }, opts)).toEqual({ ok: false, code: "rephrase", message: "An RSI lookback must be between 2 and 100 hours. You gave 240." });
+    // Anything else the schema refuses keeps the general message.
+    const odd = checkPlan({ ...plan, sizePctOfCash: "20" }, opts);
+    expect(!odd.ok && odd.message).toMatch(/^I couldn't turn that into a plan\./);
+    expect(checkPlan(null, opts)).toMatchObject({ ok: false, code: "rephrase" });
+    expect(checkPlan("plan", opts)).toMatchObject({ ok: false, code: "rephrase" });
   });
 });
 

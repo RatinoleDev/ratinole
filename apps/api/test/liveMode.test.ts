@@ -39,7 +39,7 @@ function pretendVaults(owner: string) {
     down: false,
     /** ETH the agent's key holds for network fees. */
     operatorEth: 0.01,
-    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0, otherUnpriced: false } as VaultInfo,
+    info: { vault: VAULT, owner: owner.toLowerCase() as Address, operator: OPERATOR, paused: false, cash: 100, token: { qty: 0, tradable: true, priceUsd: 2000 }, otherUsd: 0, otherUnpriced: false, dailyLimitUsd: 500 } as VaultInfo,
   };
   const reader: VaultReader = {
     factory: FACTORY,
@@ -516,5 +516,67 @@ describe.skipIf(!hasDb)("live mode", () => {
     expect(board.map((r: { agentId: string }) => r.agentId)).toEqual([paper.id]);
     const feed = (await app.inject({ method: "GET", url: "/api/public/decisions" })).json();
     expect(feed.every((d: { agentId: string }) => d.agentId === paper.id)).toBe(true);
+  });
+
+  it("says what the vault holds when that is under the minimum", async () => {
+    const s = await withVault();
+    s.vault.info.cash = 4;
+    const res = await s.launch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: "vault_empty", message: "Your vault holds $4.00, and a live agent needs at least $5 in it. Deposit more USDG first." });
+  });
+
+  it("does not launch an agent whose every order would be under the smallest one the engine places", async () => {
+    const s = await withVault();
+    // $6 in the vault at 10% per trade is a 60 cent order.
+    await prisma.backtest.update({ where: { id: s.bt.id }, data: { plan: { ...plan, sizePctOfCash: 10 } } });
+    s.vault.info.cash = 6;
+    const res = await s.launch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: "order_too_small",
+      message: "With $6.00 in the vault and 10% per trade, one order would be $0.60, under the $1.00 minimum. Deposit more USDG, or use a larger size per trade.",
+    });
+    expect(await prisma.agent.count()).toBe(0);
+    // $10 at 10% is a $1 order: enough.
+    s.vault.info.cash = 10;
+    expect((await s.launch()).statusCode).toBe(201);
+  });
+
+  it("does not launch on a vault whose daily limit cannot hold a buy and the sale that follows it", async () => {
+    const s = await withVault();
+    // $100 at 20% per trade is a $20 order. Buys and sales count together, so $20 of limit holds the buy alone.
+    s.vault.info.dailyLimitUsd = 40;
+    const res = await s.launch();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: "limit_too_small",
+      message:
+        "One order of this agent is about $20.00, and your vault's daily trading limit is $40.00. The limit counts buys and sales together, so it has to cover a buy and the sale that follows: at least $44.00. Raise it on the Vault page, or use a smaller size per trade.",
+    });
+    expect(await prisma.agent.count()).toBe(0);
+    s.vault.info.dailyLimitUsd = 44;
+    expect((await s.launch()).statusCode).toBe(201);
+  });
+
+  it("a plan that never sells only needs a daily limit that holds its buy", async () => {
+    const s = await withVault();
+    await prisma.backtest.update({ where: { id: s.bt.id }, data: { plan: { markets: ["ETH"], kind: "dca", entry: [], cadenceHours: 168, exit: {}, filters: [], sizePctOfCash: 20 } } });
+    s.vault.info.dailyLimitUsd = 15;
+    expect((await s.launch()).json()).toMatchObject({ error: "limit_too_small", message: expect.stringMatching(/^One order of this agent is about \$20\.00, over your vault's daily trading limit of \$15\.00\./) });
+    s.vault.info.dailyLimitUsd = 20;
+    expect((await s.launch()).statusCode).toBe(201);
+  });
+
+  it("resuming starts the exits afresh: an exit left open by the stopped run is not carried over", async () => {
+    const s = await withVault();
+    s.vault.info.token.qty = 0.05;
+    const { id } = (await s.launch()).json();
+    const since = new Date(Date.UTC(2026, 10, 20, 9));
+    await prisma.agentState.update({ where: { agentId: id }, data: { exitPendingSince: since, exitPendingKind: "stop loss", peakSeenTo: since } });
+    await prisma.agent.update({ where: { id }, data: { status: "paused" } });
+    expect((await app.inject({ method: "PATCH", url: `/api/agents/${id}`, headers: { cookie: s.cookie }, payload: { status: "active" } })).statusCode).toBe(200);
+    // The open exit is gone. How far the trailing-stop high has looked is kept: the position was open all along.
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: id } })).toMatchObject({ qty: 0.05, exitPendingSince: null, exitPendingKind: null, peakSeenTo: since });
   });
 });

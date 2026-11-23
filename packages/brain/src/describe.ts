@@ -57,8 +57,11 @@ export function describeCondition(c: Condition, tunedWindow?: number): string {
     }
     case "trend_pct": {
       const trend = w == null ? "The long trend" : `The ${w}-hour trend`;
-      if (v === 0 && (c.op === ">" || c.op === "crosses_above")) return `${trend} is rising`;
-      if (v === 0 && (c.op === "<" || c.op === "crosses_below")) return `${trend} is falling`;
+      if (v === 0 && c.op === ">") return `${trend} is rising`;
+      if (v === 0 && c.op === "<") return `${trend} is falling`;
+      // A cross holds in one hour only, the hour the trend changes direction. "Is rising" would promise more.
+      if (v === 0 && c.op === "crosses_above") return `${trend} turns up`;
+      if (v === 0 && c.op === "crosses_below") return `${trend} turns down`;
       return `${trend} ${opWords(c.op)} ${signed(v)}% a day`;
     }
     case "change_pct": {
@@ -165,6 +168,12 @@ export function describePlan(
   return rows;
 }
 
+/** Does the plan ever sell? A plan that only buys (a schedule with no exit) never needs room to sell in. */
+export function hasExit(plan: Plan): boolean {
+  const e = plan.exit;
+  return e.takeProfitPct != null || e.stopLossPct != null || e.trailingStopPct != null || (e.conditions?.length ?? 0) > 0;
+}
+
 export function hasLossLimit(plan: Plan): boolean {
   return plan.exit.stopLossPct != null || plan.exit.trailingStopPct != null;
 }
@@ -175,6 +184,7 @@ export function planChecks(plan: Plan, maxSizePct: number): PlanCheck[] {
     { pass: plan.markets.length > 0 && (plan.entry.length > 0 || plan.kind === "dca"), label: "Strategy is complete enough to run" },
     { pass: hasLossLimit(plan), label: "Has a loss limit" },
     { pass: plan.filters.length > 0, label: "Has a reason to stand aside" },
-    { pass: plan.sizePctOfCash <= maxSizePct, label: `Risk per trade is ${maxSizePct}% or less` },
+    // This checks the size of a trade, not what it can lose: the loss limit is the row above.
+    { pass: plan.sizePctOfCash <= maxSizePct, label: `Size per trade is within your ${maxSizePct}% cap` },
   ];
 }

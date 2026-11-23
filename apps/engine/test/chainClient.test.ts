@@ -149,15 +149,15 @@ describe("the chain client reads a node's answers correctly", () => {
     expect(signed).toHaveLength(1);
   });
 
-  it("says so when the agent's own wallet cannot pay the network fee", async () => {
+  it("says so when the service's trading wallet cannot pay the network fee", async () => {
     node.handlers.set("eth_estimateGas", () => fail(-32000, "gas required exceeds allowance (0)"));
-    expect(await buy()).toEqual({ ok: false, reason: "the agent's own wallet is out of gas money" });
+    expect(await buy()).toEqual({ ok: false, reason: "the service's trading wallet could not pay the network fee" });
     expect(sent()).toBe(false);
 
     node.healthy();
     node.handlers.set("eth_sendRawTransaction", () => fail(-32000, "insufficient funds for gas * price + value"));
     const out = await buy();
-    expect(out).toMatchObject({ ok: false, reason: "the agent's own wallet is out of gas money" });
+    expect(out).toMatchObject({ ok: false, reason: "the service's trading wallet could not pay the network fee" });
     // It was signed and handed over before it was refused, so the record carries its hash.
     expect(signed).toHaveLength(1);
     expect(out.txHash).toBe(signed[0]);

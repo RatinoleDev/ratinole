@@ -47,7 +47,7 @@ const chainConfig = (live: boolean) => ({
   operator: live ? "0x0be7a70700000000000000000000000000000001" : null,
   stable: { symbol: "USDG", address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", decimals: 6 },
   tokens: [{ market: "ETH", symbol: "WETH", address: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", decimals: 18 }],
-  limits: { minVaultUsd: 5, maxVaultUsd: 500, defaultSlippageBps: 100, defaultDailyLimitUsd: 200 },
+  limits: { minVaultUsd: 5, maxVaultUsd: 500, defaultSlippageBps: 100, defaultDailyLimitUsd: 500 },
 });
 
 /** Mock the API. `signedIn` decides what /api/me returns; `extra` overrides handlers by "METHOD /path". */

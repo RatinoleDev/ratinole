@@ -14,6 +14,26 @@ export interface PositionState {
   dayStart: number;
   /** Equity at the start of the current UTC day. */
   dayStartEquity: number;
+  /**
+   * Open time (ms) of the newest candle whose close the trailing-stop high has taken in. After hours the agent
+   * could not read (stale data, or the engine was down) every close since this one is looked at, so the high is
+   * never missed. Null or absent when flat, and on positions opened before this was kept.
+   */
+  peakSeenTo?: number | null;
+  /**
+   * An exit that was reached and whose sale did not complete: the order was refused or late, or the vault's daily
+   * limit let only part of the position go. While this is set the agent sells in every hour it can, whether or not
+   * the exit still holds, the way a triggered stop stays triggered. Cleared when the position is closed. Paper
+   * sales always complete, so this is only ever set for live agents.
+   */
+  exitPending?: ExitPending | null;
+}
+
+export type ExitKind = "take profit" | "stop loss" | "trailing stop" | "exit rule";
+export interface ExitPending {
+  /** The hour (ms) the exit was first reached. */
+  since: number;
+  kind: ExitKind;
 }
 
 export interface Fill {
@@ -68,7 +88,7 @@ export function applySell(s: PositionState, price: number, costPct: number): { s
   const gross = s.qty * price;
   const fee = gross * (costPct / 100);
   return {
-    state: { ...s, cash: s.cash + gross - fee, qty: 0, avgEntry: null, peak: null },
+    state: { ...s, cash: s.cash + gross - fee, qty: 0, avgEntry: null, peak: null, peakSeenTo: null, exitPending: null },
     fill: { side: "sell", price, qty: s.qty, notional: gross, fee },
   };
 }
@@ -87,7 +107,7 @@ export type LiveFill =
       qty: number;
       notional: number;
       fee: number;
-      /** Why the order was smaller than the plan asked for, as a sentence. It replaces "N% of cash" in the explanation. */
+      /** Why the order was smaller than the plan asked for, as a sentence. It is added to the explanation. */
       note?: string;
     }
   | { ok: false; reason: string };
@@ -124,6 +144,8 @@ export function settleSell(s: PositionState, f: DoneFill): { state: PositionStat
       qty: flat ? 0 : left,
       avgEntry: flat ? null : s.avgEntry,
       peak: flat ? null : s.peak,
+      peakSeenTo: flat ? null : s.peakSeenTo,
+      exitPending: flat ? null : s.exitPending,
     },
     fill: { side: "sell", price: f.notional / f.qty, qty: f.qty, notional: f.notional, fee: f.fee },
   };

@@ -49,6 +49,8 @@ export interface SignalSpec {
   range: [number, number];
   /** Decimal places when showing a value (default by magnitude). */
   digits?: number;
+  /** A percentage that is never negative (a size, not a change): shown without a plus sign. */
+  unsigned?: boolean;
   compute?: (s: SeriesSource, window: number) => Series;
 }
 
@@ -186,6 +188,7 @@ export const SIGNALS: Record<SignalId, SignalSpec> = {
     name: "Volatility",
     meaning: "Typical daily move in percent, from the spread of hourly returns over the last `window` hours.",
     unit: "%",
+    unsigned: true,
     available: true,
     defaultWindow: 24,
     windowChoices: [24],
@@ -298,8 +301,11 @@ export function formatSignalValue(id: SignalId, v: number): string {
   const spec = SIGNALS[id];
   const abs = Math.abs(v);
   const digits = spec.digits ?? (abs >= 100 ? 0 : abs >= 10 ? 1 : 2);
-  const n = v.toFixed(digits).replace(/^-/, "−");
-  if (spec.unit === "%") return `${v > 0 ? "+" : ""}${n}%`;
+  const fixed = v.toFixed(digits);
+  // A value that rounds to nothing is shown as plain zero: never "+0.00%" or "−0.00%".
+  const zero = Number(fixed) === 0;
+  const n = zero ? fixed.replace(/^-/, "") : fixed.replace(/^-/, "−");
+  if (spec.unit === "%") return `${v > 0 && !zero && !spec.unsigned ? "+" : ""}${n}%`;
   if (spec.unit === "x") return `${n}×`;
   return n;
 }

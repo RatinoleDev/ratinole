@@ -18,7 +18,7 @@ import {
 } from "./evidence";
 import { explain, usd, type Situation } from "./explain";
 import { runGuard, vetoes } from "./guard";
-import { applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, type Fill, type LiveFill, type PositionState } from "./paper";
+import { applyBuy, applySell, equityOf, rollDay, settleBuy, settleSell, type ExitKind, type Fill, type LiveFill, type PositionState } from "./paper";
 import { classifyRegime, type RegimeParams } from "./regime";
 import { SeriesSource, formatSignalValue, type SignalId } from "./signals";
 import { HOUR_MS, type Action, type Candle, type Decision, type EvidenceItem, type Filter, type GuardCheck, type Plan } from "./types";
@@ -44,8 +44,6 @@ export interface DecideContext {
   /** Where non-candle evidence came from, shown next to it (e.g. { funding: "Hyperliquid" }). */
   sources?: { funding?: string };
   regimeParams?: RegimeParams;
-  /** Real money in a vault, not a paper fill. Only changes how the guard describes the order. */
-  live?: boolean;
 }
 
 export interface StepInput {
@@ -86,6 +84,17 @@ function hhmm(ms: number): string {
   return new Date(ms).toISOString().slice(11, 16);
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "14:00 UTC on 21 Nov" */
+function whenText(ms: number): string {
+  const d = new Date(ms);
+  return `${hhmm(ms)} UTC on ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+}
+
+/**
+ * Whether the prices are current enough to act on. Reading the market for a buy also needs enough history; an
+ * open position's exits do not, so a short history never stands between a position and its stop.
+ */
 function freshness(candle: Candle, hour: number, fillPrice: number | null, hasHistory: boolean): { ok: boolean; detail: string } {
   if (!hasHistory) return { ok: false, detail: "Not enough price history to read the market yet." };
   const expected = hour - HOUR_MS;
@@ -93,15 +102,15 @@ function freshness(candle: Candle, hour: number, fillPrice: number | null, hasHi
     const ago = Math.round((hour - (candle.t + HOUR_MS)) / HOUR_MS);
     return {
       ok: false,
-      detail: `The latest candle closed at ${hhmm(candle.t + HOUR_MS)} UTC, ${ago} hour${ago === 1 ? "" : "s"} before this run. Waiting for fresh data.`,
+      detail: `The newest price data ends at ${hhmm(candle.t + HOUR_MS)} UTC, ${ago} hour${ago === 1 ? "" : "s"} before this decision. Waiting for fresh data.`,
     };
   }
-  if (fillPrice == null) return { ok: false, detail: `No opening price yet for the hour starting ${hhmm(hour)} UTC.` };
-  return { ok: true, detail: `The hourly candle to ${hhmm(hour)} UTC is in.` };
+  if (fillPrice == null) return { ok: false, detail: `The opening price for ${hhmm(hour)} UTC is not in yet.` };
+  return { ok: true, detail: `Prices are complete up to ${hhmm(hour)} UTC.` };
 }
 
 /** Evidence about an open position, and whether a price exit has been reached. */
-function positionEvidence(state: PositionState, close: number, plan: Plan): { items: EvidenceItem[]; reason: string | null; pnlPct: number } {
+function positionEvidence(state: PositionState, close: number, plan: Plan): { items: EvidenceItem[]; reason: string | null; kind: ExitKind | null; pnlPct: number } {
   const entry = state.avgEntry ?? close;
   const pnlPct = (close / entry - 1) * 100;
   const { takeProfitPct: tp, stopLossPct: sl, trailingStopPct: trail } = plan.exit;
@@ -112,8 +121,14 @@ function positionEvidence(state: PositionState, close: number, plan: Plan): { it
     { name: "Since buying", value: `${pct(pnlPct)} (average entry ${usd(entry)})`, score: Math.round(score * 100) },
   ];
   let reason: string | null = null;
-  if (tp != null && pnlPct >= tp) reason = `Take profit reached: ${pct(pnlPct)} since buying, target +${tp}%.`;
-  else if (sl != null && pnlPct <= -sl) reason = `Stop loss reached: ${pct(pnlPct)} since buying, stop at −${sl}%.`;
+  let kind: ExitKind | null = null;
+  if (tp != null && pnlPct >= tp) {
+    reason = `Take profit reached: ${pct(pnlPct)} since buying, target +${tp}%.`;
+    kind = "take profit";
+  } else if (sl != null && pnlPct <= -sl) {
+    reason = `Stop loss reached: ${pct(pnlPct)} since buying, stop at −${sl}%.`;
+    kind = "stop loss";
+  }
   if (trail != null && state.peak != null) {
     const dd = (close / state.peak - 1) * 100;
     items.push({
@@ -121,16 +136,19 @@ function positionEvidence(state: PositionState, close: number, plan: Plan): { it
       value: `${pct(dd)} from the high since buying (stop ${trail}% under it)`,
       score: Math.round(Math.min(1, Math.max(0, -dd / trail)) * 100),
     });
-    if (!reason && dd <= -trail) reason = `Trailing stop reached: ${Math.abs(dd).toFixed(1)}% under the high since buying.`;
+    if (!reason && dd <= -trail) {
+      reason = `Trailing stop reached: ${Math.abs(dd).toFixed(1)}% under the high since buying, stop at ${trail}%.`;
+      kind = "trailing stop";
+    }
   }
-  return { items, reason, pnlPct };
+  return { items, reason, kind, pnlPct };
 }
 
 function exitSummary(plan: Plan): string[] {
   const out: string[] = [];
   if (plan.exit.takeProfitPct != null) out.push(`Take profit at +${plan.exit.takeProfitPct}%`);
   if (plan.exit.stopLossPct != null) out.push(`stop at −${plan.exit.stopLossPct}%`);
-  if (plan.exit.trailingStopPct != null) out.push(`trailing stop ${plan.exit.trailingStopPct}%`);
+  if (plan.exit.trailingStopPct != null) out.push(`trailing stop ${plan.exit.trailingStopPct}% under the high`);
   if (out[0]) out[0] = out[0].charAt(0).toUpperCase() + out[0].slice(1);
   return out;
 }
@@ -145,11 +163,20 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
   const mark = fillPrice ?? close;
 
   let state = rollDay(inp.state, hour, mark);
-  if (state.qty > 0) state = { ...state, peak: Math.max(state.peak ?? close, close) };
+  if (state.qty > 0) {
+    // The high since buying takes in every close the agent has not looked at yet. Hour after hour that is this
+    // hour's alone. After hours it could not read (stale data, or the engine was down) it is every close since,
+    // so a high made in those hours still counts for the trailing stop.
+    let peak = Math.max(state.peak ?? close, close);
+    const seen = state.peakSeenTo;
+    if (seen != null) for (let j = i - 1; j >= 0 && src.candles[j]!.t > seen; j--) peak = Math.max(peak, src.candles[j]!.c);
+    state = { ...state, peak, peakSeenTo: Math.max(seen ?? candle.t, candle.t) };
+  }
 
   const reading = classifyRegime(src, i, ctx.regimeParams);
   const regime = reading?.regime ?? "ranging";
   const fresh = freshness(candle, hour, fillPrice, reading != null);
+  const freshForExit = freshness(candle, hour, fillPrice, true);
   const notChecked = plan.filters.map((f) => NOT_CHECKED_SHORT[f]).filter((x): x is string => !!x);
   const ctxBuy = reading ? contextEvidence(src, i, reading, ctx.sources) : [];
 
@@ -162,19 +189,19 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
   const guardFor = (action: "buy" | "sell"): GuardCheck[] =>
     runGuard({
       action,
-      fresh,
+      fresh: action === "buy" ? fresh : freshForExit,
       sizePctOfCash: plan.sizePctOfCash,
       maxSizePct: ctx.limits.maxSizePct,
       dailyPnlPct,
       dailyLossCapPct: ctx.limits.dailyLossCapPct,
       regime,
       standsAsideWhenStressed: plan.filters.includes("stressed_regime"),
-      costPct: ctx.costPct,
-      live: ctx.live,
     });
 
   const cadenceMs = (plan.cadenceHours ?? 0) * HOUR_MS;
-  const dcaDue = plan.kind === "dca" && cadenceMs > 0 && (state.lastBuyAt == null || hour - state.lastBuyAt >= cadenceMs);
+  const onSchedule = plan.kind === "dca" && cadenceMs > 0;
+  const dcaDue = onSchedule && (state.lastBuyAt == null || hour - state.lastBuyAt >= cadenceMs);
+  const hoursToNextBuy = () => Math.max(1, Math.ceil(((state.lastBuyAt ?? hour) + cadenceMs - hour) / HOUR_MS));
 
   let action: Action = "hold";
   let confidence: number;
@@ -191,15 +218,14 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     const wants = plan.kind === "dca" ? dcaDue && allEntryHold : allEntryHold && buyConf >= ctx.params.confidenceThreshold;
     confidence = 100 - buyConf;
     if (!fresh.ok) {
-      situation = { type: "stale", detail: fresh.detail };
+      situation = { type: "stale", detail: fresh.detail, inPosition: state.qty > 0 };
       return;
     }
     if (!wants) {
       if (plan.kind === "dca" && !dcaDue) {
-        const left = Math.max(1, Math.ceil(((state.lastBuyAt ?? hour) + cadenceMs - hour) / HOUR_MS));
-        situation = { type: "not_due", hoursLeft: left };
+        situation = { type: "not_due", hoursLeft: hoursToNextBuy() };
       } else if (!allEntryHold) {
-        situation = { type: "waiting", unmet: entry.filter((r) => !r.holds), buyConfidence: buyConf };
+        situation = { type: "waiting", unmet: entry.filter((r) => !r.holds), total: entry.length, buyConfidence: buyConf, scheduledDue: onSchedule };
       } else {
         const weakest = [...evidence].sort((a, b) => a.score - b.score)[0];
         situation = { type: "weak", buyConfidence: buyConf, threshold: ctx.params.confidenceThreshold, weakest };
@@ -208,21 +234,23 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     }
     const v = vetoes(guard);
     if (v.length) {
-      situation = { type: "vetoed", side: "buy", confidence: buyConf, vetoes: v };
+      situation = { type: "vetoed", confidence: buyConf, vetoes: v, scheduledDue: onSchedule };
       return;
     }
     const live = inp.liveFill;
     if (live && !live.ok) {
-      situation = { type: "not_executed", side: "buy", confidence: buyConf, why: live.reason };
+      situation = { type: "not_bought", confidence: buyConf, why: live.reason, scheduledDue: onSchedule };
       return;
     }
     if (live && live.side !== "buy") throw new Error("A sell was booked for a decision to buy");
+    const cashBefore = state.cash;
     const res = live ? settleBuy(state, live, hour) : applyBuy(state, fillPrice!, plan.sizePctOfCash, ctx.costPct, hour);
     if (!res) {
       situation = { type: "no_cash" };
       return;
     }
-    state = res.state;
+    // Closes up to this hour came before the buy. The high since buying starts with the next one.
+    state = { ...res.state, peakSeenTo: candle.t };
     fill = res.fill;
     action = "buy";
     confidence = buyConf;
@@ -230,7 +258,8 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
       type: "entered",
       readings: entry,
       fill: res.fill,
-      sizePct: plan.sizePctOfCash,
+      planPct: plan.sizePctOfCash,
+      actualPct: cashBefore > 0 ? (res.fill.notional / cashBefore) * 100 : plan.sizePctOfCash,
       cadenceHours: plan.kind === "dca" ? plan.cadenceHours : undefined,
       note: live?.note,
     };
@@ -242,37 +271,59 @@ export function decideStep(ctx: DecideContext, inp: StepInput): StepOutput {
     const ctxSell = negate(ctxBuy);
     const sellConf = combineConfidence(ruleItems, ctxSell);
     const condExit = exitConds.find((r) => r.holds);
-    const reason =
-      pos.reason ??
-      (condExit ? `Exit rule met: ${describeCondition(condExit.rc.cond, condExit.rc.window)} (now ${formatSignalValue(condExit.rc.spec.id as SignalId, condExit.current!)}).` : null);
+    const pending = state.exitPending ?? null;
+
+    let reason = pos.reason;
+    let kind = pos.kind;
+    if (!reason && condExit) {
+      reason = `Exit rule met: ${describeCondition(condExit.rc.cond, condExit.rc.window)} (now ${formatSignalValue(condExit.rc.spec.id as SignalId, condExit.current!)}).`;
+      kind = "exit rule";
+    }
+    // An exit reached in an earlier hour whose sale did not complete stays an order to sell. If nothing asks for a
+    // sale this hour on its own, that one does: a stop that was hit is not forgotten because the price came back.
+    let stillTrying: string | undefined;
+    if (!reason && pending) {
+      const sale = `the sale from ${whenText(pending.since)} (${pending.kind === "exit rule" ? "exit rule met" : `${pending.kind} reached`})`;
+      reason = `Finishing ${sale}. Now ${pct(pos.pnlPct)} since buying.`;
+      stillTrying = `The agent is still trying to finish ${sale}`;
+      kind = pending.kind;
+    }
 
     evidence = [...ruleItems, ...ctxSell];
     guard = guardFor("sell");
     confidence = 100 - sellConf;
-    situation = { type: "holding", pnlPct: pos.pnlPct, exits: exitSummary(plan) };
+    const dueButWaiting = dcaDue && !allEntryHold;
+    situation = {
+      type: "holding",
+      pnlPct: pos.pnlPct,
+      exits: exitSummary(plan),
+      conditions: exitConds,
+      schedule: !onSchedule ? undefined : dueButWaiting ? { waitingFor: entry.filter((r) => !r.holds) } : !dcaDue ? { hoursLeft: hoursToNextBuy() } : undefined,
+    };
 
-    if (!fresh.ok) {
-      situation = { type: "stale", detail: fresh.detail };
-    } else if (reason) {
-      const v = vetoes(guard);
-      if (v.length) {
-        situation = { type: "vetoed", side: "sell", confidence: sellConf, vetoes: v, reason };
+    if (!freshForExit.ok) {
+      situation = { type: "stale", detail: freshForExit.detail, inPosition: true };
+    } else if (reason && kind) {
+      const live = inp.liveFill;
+      if (live && !live.ok) {
+        // Nothing was sold. The exit stays open, and the agent sells in the first hour it can.
+        state = { ...state, exitPending: pending ?? { since: hour, kind } };
+        situation = { type: "not_sold", reason, why: live.reason, stillTrying };
       } else {
-        const live = inp.liveFill;
+        if (live && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
         // A sale of part of the position is measured against the cost of that part.
-        const soldQty = live && live.ok ? Math.min(live.qty, state.qty) : state.qty;
+        const soldQty = live ? Math.min(live.qty, state.qty) : state.qty;
         const costBasis = (state.avgEntry ?? close) * soldQty;
-        if (live && live.ok && live.side !== "sell") throw new Error("A buy was booked for a decision to sell");
-        const res = live ? (live.ok ? settleSell(state, live) : null) : applySell(state, fillPrice!, ctx.costPct);
-        if (live && !live.ok) {
-          situation = { type: "not_executed", side: "sell", confidence: sellConf, why: live.reason, reason };
-        } else if (res) {
+        const res = live ? settleSell(state, live) : applySell(state, fillPrice!, ctx.costPct);
+        if (res) {
           const realizedPct = ((res.fill.notional - res.fill.fee) / costBasis - 1) * 100;
           state = res.state;
+          // Only part of it could be sold: the rest is sold in the first hour it can be.
+          if (state.qty > 0) state = { ...state, exitPending: pending ?? { since: hour, kind } };
           fill = res.fill;
           action = "sell";
           confidence = sellConf;
-          situation = { type: "exited", reason, fill: res.fill, realizedPct, note: live && live.ok ? live.note : undefined };
+          situation = { type: "exited", reason, fill: res.fill, realizedPct, leftQty: state.qty > 0 ? state.qty : undefined, note: live?.note };
         }
       }
     } else if (dcaDue && allEntryHold) {

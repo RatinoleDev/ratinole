@@ -17,6 +17,7 @@ import {
   HOUR_MS,
   decide,
   equityOf,
+  hasExit,
   qtyText,
   requiredWarmup,
   settleBuy,
@@ -193,6 +194,8 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   // reading that follows is known to include it.
   let order = await prisma.liveOrder.findUnique({ where: { agentId_hour: { agentId, hour: new Date(hour) } } });
   if (booking && !order) return skip("no order to book");
+  /** Why the order was smaller than the plan asked for, if it was. Kept with the order, so a later run still says so. */
+  let note: string | undefined = order?.note ?? undefined;
   let outcome: SwapOutcome | null = null;
   if (order) {
     if (order.status === "pending") {
@@ -250,7 +253,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   // The vault was seen empty at this hour. That is written down (the stored position is zeroed): if the owner
   // deposits and resumes later, the money that left is then valued as of now, not at whatever the price is on the
   // day they come back.
-  const zeroStored = () => prisma.agentState.update({ where: { agentId }, data: { cash: 0, qty: 0, avgEntry: null, peak: null } });
+  const zeroStored = () => prisma.agentState.update({ where: { agentId }, data: { cash: 0, qty: 0, avgEntry: null, peak: null, peakSeenTo: null, exitPendingSince: null, exitPendingKind: null } });
   const emptied = equityNow < EMPTY_USD;
   if (emptied && !order) {
     await zeroStored();
@@ -293,7 +296,12 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     cash,
     qty,
     avgEntry: qty === 0 ? null : before.qty === 0 || before.avgEntry == null ? mark : added > 0 ? (before.avgEntry * before.qty + mark * added) / qty : before.avgEntry,
+    // Tokens the owner adds do not move the high the trailing stop follows: it stays the high since the agent's
+    // own buy. A position the agent finds (it had none) starts its high at this hour's price.
     peak: qty === 0 ? null : before.qty === 0 ? mark : before.peak,
+    peakSeenTo: qty === 0 ? null : before.qty === 0 ? lastCandle.t : before.peakSeenTo,
+    // An open exit belongs to the position. With no position left there is nothing to sell.
+    exitPending: qty === 0 ? null : before.exitPending,
     dayStartEquity: before.dayStartEquity * scale,
   };
 
@@ -305,12 +313,9 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     costPct: LIVE.costPct,
     market: agent.market,
     sources: funding.size && deps.funding ? { funding: deps.funding.label } : undefined,
-    live: true,
   };
   const want = decide(ctx, { candles, hour, state, fillPrice });
 
-  /** Why the order was smaller than the plan asked for, if it was. */
-  let note: string | undefined;
   if (want.fill && !order) {
     // The chain was just read, which takes time. Look again: the owner may have paused or deleted the agent.
     const still = await prisma.agent.findUnique({ where: { id: agentId }, select: { status: true } });
@@ -323,12 +328,22 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
     if (clock() - hour > LIVE.orderWindowMs) {
       outcome = { ok: false, reason: LATE };
     } else if (buying) {
-      const dollars = Math.min(want.fill.notional, room, fromUnits(snap.stable, LIVE_STABLE.decimals));
+      // The limit counts buys and sales together. A buy leaves room in it for the sale of what it bought, so a
+      // position can always be sold in the window it was bought in, stop loss included. A plan with no exit never
+      // sells, and may use all the room there is.
+      const sells = hasExit(plan);
+      const buyRoom = sells ? room / LIVE.exitRoomFactor : room;
+      const dollars = Math.min(want.fill.notional, buyRoom, fromUnits(snap.stable, LIVE_STABLE.decimals));
       if (room < least) outcome = { ok: false, reason: limitUsedUp };
+      else if (buyRoom < least) outcome = { ok: false, reason: "the vault's daily trading limit has too little left for a buy and the sale that would follow it" };
       else if (dollars < least) outcome = { ok: false, reason: `the order would be smaller than the ${usd(least)} minimum` };
       else {
         amountIn = toUnits(dollars, LIVE_STABLE.decimals);
-        if (dollars < want.fill.notional - 0.01) note = "The vault's daily trading limit made this order smaller than planned.";
+        if (dollars < want.fill.notional - 0.01) {
+          note = sells
+            ? `The order is smaller than the ${plan.sizePctOfCash}% the plan asks for, so that the sale of this position still fits in the vault's daily trading limit.`
+            : `The vault's daily trading limit made this order smaller than the ${plan.sizePctOfCash}% the plan asks for.`;
+        }
       }
     } else {
       // A sale is the whole position, whatever its size, or as much of it as the vault's daily limit still allows.
@@ -343,7 +358,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
         else {
           const part = toUnits(sellUsd / price, token.decimals);
           amountIn = part < snap.token ? part : snap.token;
-          note = "The vault's daily trading limit allowed only part of the position to be sold. The rest stays until the limit allows it.";
+          note = "The vault's daily trading limit allowed only part of the position to be sold. The agent tries to sell the rest every hour.";
         }
       }
       if (!outcome && amountIn <= 0n) outcome = { ok: false, reason: "there was nothing to trade" };
@@ -360,7 +375,7 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
       const fromBlock = await chain.blockNumber();
       order = await prisma.liveOrder.create({
         // Stamped with the engine's own clock, the one every later check of this order's age uses.
-        data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString(), createdAt: new Date(now) },
+        data: { agentId, hour: new Date(hour), side: want.fill.side, vault, tokenIn: req.tokenIn, tokenOut: req.tokenOut, amountIn: amountIn.toString(), fromBlock: fromBlock.toString(), note: note ?? null, createdAt: new Date(now) },
       });
       const orderId = order.id;
       try {
@@ -410,19 +425,25 @@ async function runHour(agentId: string, hour: number, deps: Deps, booking: boole
   if (liveFill?.ok && want.fill?.side !== liveFill.side) {
     // The order went through in a run that was interrupted, and the decision worked out now is not the one that
     // placed it (the inputs can differ a little minutes later). The trade is real, so it is booked as it happened,
-    // and the record says plainly that its reasons were not kept.
+    // and the record says plainly that its reasons were not kept and that the readings beside it are later ones.
     const res = liveFill.side === "buy" ? settleBuy(state, liveFill, hour) : settleSell(state, liveFill);
     if (!res) throw new Error(`Agent ${agentId}: order ${order?.id} has no amounts to book`);
+    let booked = res.state;
+    // A buy starts the trailing-stop high at its own price. A sale that left part of the position was an exit:
+    // the rest is still to be sold.
+    if (liveFill.side === "buy") booked = { ...booked, peakSeenTo: lastCandle.t };
+    else if (booked.qty > 0) booked = { ...booked, exitPending: state.exitPending ?? { since: hour, kind: "exit rule" } };
     const what = liveFill.side === "buy" ? `Bought ${usd(res.fill.notional)} of ${agent.market} at ${usd(res.fill.price)}` : `Sold ${qtyText(res.fill.qty)} ${agent.market} at ${usd(res.fill.price)}`;
+    const left = liveFill.side === "sell" && booked.qty > 0 ? ` ${qtyText(booked.qty)} ${agent.market} is still held.` : "";
     out = {
       decision: {
         ...want.decision,
         action: liveFill.side,
-        explanation: `${liveFill.side === "buy" ? "Buy" : "Sell"}. This order was placed earlier in the hour by a run that was interrupted before it could write down its reasons. ${what}.`,
+        explanation: `${liveFill.side === "buy" ? "Buy" : "Sell"}. This order was placed earlier in the hour by a run that was interrupted before it could write down its reasons. The readings shown with it were taken afterwards. ${what}.${left}${note ? ` ${note}` : ""}`,
       },
       fill: res.fill,
-      state: res.state,
-      equity: equityOf(res.state, mark),
+      state: booked,
+      equity: equityOf(booked, mark),
       markPrice: mark,
     };
     log("warn", "live order booked without its reasons", { agentId, orderId: order?.id, hour: new Date(hour).toISOString() });

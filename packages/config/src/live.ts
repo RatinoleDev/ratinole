@@ -46,6 +46,13 @@ export const LIVE = {
    * there is nothing left that could be sold. Well under the smallest order, so the agent's own buys stay above it.
    */
   positionFloorUsd: 0.25,
+  /**
+   * A vault's daily limit counts buys and sales together. A buy that used up the limit would leave its own
+   * position unsellable until the next 24-hour window, stop loss included. So a buy is never larger than what is
+   * left of the limit divided by this: after it, there is still room to sell what was bought, even 20% higher.
+   * Applies to plans that have an exit. The same figure is checked when an agent is launched.
+   */
+  exitRoomFactor: 2.2,
   /** What the guard assumes a trade costs (pool fee plus typical price impact), in percent. */
   costPct: 0.1,
   /**
@@ -57,7 +64,7 @@ export const LIVE = {
   /** Under this much ETH on the agent's key the health check reports a problem: every trade pays a network fee from it. */
   minOperatorEth: 0.0005,
   /** Limits suggested when a vault is created. The owner can change both at any time. */
-  defaults: { maxSlippageBps: 100, dailyLimitUsd: 200 },
+  defaults: { maxSlippageBps: 100, dailyLimitUsd: 500 },
   /** Hard bounds the vault contract accepts for slippage, in basis points. */
   slippageBps: { min: 10, max: 500 },
 } as const;

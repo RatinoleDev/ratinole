@@ -159,14 +159,25 @@ describe.skipIf(!hasDb)("a live agent on a scripted price path", () => {
     expect((h3.evidence as { name: string; value: string }[]).find((e) => e.name === "Trailing stop")?.value).toBe("−3.0% from the high since buying (stop 5% under it)");
     const sell = await s.hour(4);
     expect(sell).toMatchObject({ action: "sell", qtyAfter: 0 });
-    expect(sell.explanation).toMatch(/^Sell\. Trailing stop reached: 5\.9% under the high since buying\. Sold 0\.1249 ETH at \$2,074\.6\d, \+3\.\d% on the trade after costs\.$/);
+    expect(sell.explanation).toMatch(/^Sell\. Trailing stop reached: 5\.9% under the high since buying, stop at 5%\. Sold 0\.1249 ETH at \$2,074\.6\d, \+3\.\d% on the trade after costs\.$/);
     expect(s.chain.token).toBe(0n);
     // After the sale the high is forgotten: a new position starts its own.
     const state = await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } });
-    expect(state).toMatchObject({ qty: 0, peak: null, avgEntry: null });
+    expect(state).toMatchObject({ qty: 0, peak: null, avgEntry: null, peakSeenTo: null });
   });
 
-  it("when the vault refuses the sale, says so, changes nothing, and sells the next hour", async () => {
+  it("a high made in hours the engine did not run still counts for the trailing stop", async () => {
+    const s = await setup(plan({ trailingStopPct: 5 }), [5, 5, -6, 0]);
+    await s.hour(0);
+    // The engine is down for two hours, while the price rises 10%. When it is back the price is 6% under a high
+    // it never looked at, and still above what it paid.
+    const sell = await s.hour(3);
+    expect(sell).toMatchObject({ action: "sell", qtyAfter: 0 });
+    expect(sell.explanation).toMatch(/^Sell\. Trailing stop reached: 6\.0% under the high since buying, stop at 5%\. Sold 0\.1249 ETH at \$2,072\.7\d, \+3\.\d% on the trade after costs\.$/);
+    expect(s.chain.token).toBe(0n);
+  });
+
+  it("when the vault refuses the sale, says the position is still open, and sells the next hour", async () => {
     const s = await setup(plan({ takeProfitPct: 8, stopLossPct: 4 }), [3, 3, 3, 0, 0]);
     await s.hour(0);
     await s.hour(1);
@@ -175,12 +186,59 @@ describe.skipIf(!hasDb)("a live agent on a scripted price path", () => {
     s.chain.refuse = "the vault is paused";
     const refused = await s.hour(3);
     expect(refused).toMatchObject({ action: "hold", fillSide: null, txHash: null, execError: "the vault is paused" });
-    expect(refused.explanation).toBe("Hold. Take profit reached: +9.2% since buying, target +8%, but the sell order did not go through: the vault is paused. Nothing changed.");
+    expect(refused.explanation).toBe("Hold. Take profit reached: +9.2% since buying, target +8%, but the position was not sold: the vault is paused. It is still open, and the agent tries again next hour.");
     expect(s.chain.token).toBe(bought);
     // The owner resumes the vault. The target is still reached, so the agent sells now.
     s.chain.refuse = null;
     const sell = await s.hour(4);
     expect(sell).toMatchObject({ action: "sell", qtyAfter: 0 });
+    expect(sell.explanation).toMatch(/^Sell\. Take profit reached: \+9\.2% since buying, target \+8%\. Sold /);
+    expect(s.chain.token).toBe(0n);
+  });
+
+  it("an exit that was reached stays an order to sell: refused at the stop, it is sold the next hour although the price is back", async () => {
+    // −5% takes it past the 4% stop. The sale is refused. An hour later the price is back at −1%.
+    const s = await setup(plan({ takeProfitPct: 8, stopLossPct: 4 }), [-5, 4.2, 0]);
+    await s.hour(0);
+    const bought = s.chain.token;
+    s.chain.refuse = "the pool price was worse than the vault's slippage limit";
+    const refused = await s.hour(1);
+    expect(refused).toMatchObject({ action: "hold", execError: "the pool price was worse than the vault's slippage limit" });
+    expect(refused.explanation).toBe(
+      "Hold. Stop loss reached: −5.0% since buying, stop at −4%, but the position was not sold: the pool price was worse than the vault's slippage limit. It is still open, and the agent tries again next hour.",
+    );
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } })).toMatchObject({ exitPendingSince: new Date(H0 + HOUR_MS), exitPendingKind: "stop loss" });
+
+    // Refused again: it says it is still trying, and keeps the hour the stop was first reached.
+    const again = await s.hour(2);
+    expect(again.action).toBe("hold");
+    expect(again.explanation).toMatch(
+      /^Hold\. The agent is still trying to finish the sale from \d\d:00 UTC on \d{1,2} [A-Z][a-z]{2} \(stop loss reached\), but the position was not sold: the pool price was worse than the vault's slippage limit\. It is still open, and the agent tries again next hour\.$/,
+    );
+    expect(s.chain.token).toBe(bought);
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } })).toMatchObject({ exitPendingSince: new Date(H0 + HOUR_MS) });
+
+    // The pool is back in range. −1.1% is inside the stop, and the position is sold all the same.
+    s.chain.refuse = null;
+    const sell = await s.hour(3);
+    expect(sell).toMatchObject({ action: "sell", qtyAfter: 0, execError: null });
+    expect(sell.explanation).toMatch(/^Sell\. Finishing the sale from \d\d:00 UTC on \d{1,2} [A-Z][a-z]{2} \(stop loss reached\)\. Now −1\.1% since buying\. Sold 0\.1249 ETH at \$1,979\.8\d, −1\.1% on the trade after costs\.$/);
+    expect(s.chain.token).toBe(0n);
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: s.agent.id } })).toMatchObject({ qty: 0, exitPendingSince: null, exitPendingKind: null });
+  });
+
+  it("with a small daily limit the buy is sized so that its own stop-loss sale fits in the same day", async () => {
+    // The vault lets $300 be traded today, buys and sales together. The plan asks for a $250 buy.
+    const s = await setup(plan({ takeProfitPct: 8, stopLossPct: 4 }), [-5, 0]);
+    s.chain.remainingUsd = 300;
+    const buy = await s.hour(0);
+    expect(buy.fillNotional).toBeCloseTo((300 * 0.98) / 2.2, 4);
+    expect(buy.explanation).toMatch(/Bought \$133\.64 of ETH at \$[\d,.]+, 13\.4% of cash\. The order is smaller than the 25% the plan asks for, so that the sale of this position still fits in the vault's daily trading limit\.$/);
+    // The stop is hit the next hour, with the same day's limit. All of it is sold.
+    const sell = await s.hour(1);
+    expect(sell).toMatchObject({ action: "sell", qtyAfter: 0, execError: null });
+    expect(sell.explanation).toMatch(/^Sell\. Stop loss reached: −5\.0% since buying, stop at −4%\./);
+    expect(sell.explanation).not.toMatch(/still held/);
     expect(s.chain.token).toBe(0n);
   });
 

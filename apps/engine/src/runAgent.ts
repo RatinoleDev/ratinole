@@ -10,6 +10,7 @@ import {
   requiredWarmup,
   type AgentParams,
   type Candle,
+  type ExitKind,
   type Plan,
   type PositionState,
 } from "@rationale/brain";
@@ -52,11 +53,17 @@ export const WAIT_FOR_CANDLE_MS = 15 * 60_000;
 
 export const hourFloor = (ms: number) => Math.floor(ms / HOUR_MS) * HOUR_MS;
 
+const EXIT_KINDS: readonly ExitKind[] = ["take profit", "stop loss", "trailing stop", "exit rule"];
+const isExitKind = (v: unknown): v is ExitKind => EXIT_KINDS.includes(v as ExitKind);
+
 export function toState(s: {
   cash: number;
   qty: number;
   avgEntry: number | null;
   peak: number | null;
+  peakSeenTo?: Date | null;
+  exitPendingSince?: Date | null;
+  exitPendingKind?: string | null;
   lastBuyAt: Date | null;
   dayStart: Date;
   dayStartEquity: number;
@@ -66,6 +73,8 @@ export function toState(s: {
     qty: s.qty,
     avgEntry: s.avgEntry,
     peak: s.peak,
+    peakSeenTo: s.peakSeenTo ? s.peakSeenTo.getTime() : null,
+    exitPending: s.exitPendingSince && isExitKind(s.exitPendingKind) ? { since: s.exitPendingSince.getTime(), kind: s.exitPendingKind } : null,
     lastBuyAt: s.lastBuyAt ? s.lastBuyAt.getTime() : null,
     dayStart: s.dayStart.getTime(),
     dayStartEquity: s.dayStartEquity,
@@ -78,6 +87,9 @@ export function stateRow(s: PositionState) {
     qty: s.qty,
     avgEntry: s.avgEntry,
     peak: s.peak,
+    peakSeenTo: s.peakSeenTo == null ? null : new Date(s.peakSeenTo),
+    exitPendingSince: s.exitPending ? new Date(s.exitPending.since) : null,
+    exitPendingKind: s.exitPending ? s.exitPending.kind : null,
     lastBuyAt: s.lastBuyAt == null ? null : new Date(s.lastBuyAt),
     dayStart: new Date(s.dayStart),
     dayStartEquity: s.dayStartEquity,

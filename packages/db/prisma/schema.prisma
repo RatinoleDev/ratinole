@@ -87,6 +87,12 @@ model AgentState {
   qty            Float
   avgEntry       Float?
   peak           Float?
+  /// Open time of the newest candle whose close the trailing-stop high has taken in. Null when flat.
+  peakSeenTo     DateTime?
+  /// An exit that was reached and whose sale did not complete: the hour it was first reached, and which exit
+  /// ("take profit" | "stop loss" | "trailing stop" | "exit rule"). While set, the agent sells in every hour it can.
+  exitPendingSince DateTime?
+  exitPendingKind  String?
   lastBuyAt      DateTime?
   dayStart       DateTime
   dayStartEquity Float
@@ -166,6 +172,9 @@ model LiveOrder {
   /// The block the order landed in. A later read of the vault waits for a connection that has seen this block.
   minedBlock String?
   error     String?
+  /// Why the order was smaller than the plan asked for, as a sentence for the explanation. Kept with the order so
+  /// that a run which books it later still says so.
+  note      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

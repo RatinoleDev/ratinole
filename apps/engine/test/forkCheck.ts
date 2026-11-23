@@ -119,7 +119,7 @@ async function main() {
   const start = await chain.snapshot(vault, WETH);
   const cash0 = fromUnits(start.stable, 6);
   const plan: Plan = { markets: ["ETH"], kind: "dca", entry: [], cadenceHours: 24, sizePctOfCash: 10, exit: { stopLossPct: 15 }, filters: [] };
-  const h = Math.floor(Date.now() / HOUR_MS) * HOUR_MS - 4 * HOUR_MS;
+  const h = Math.floor(Date.now() / HOUR_MS) * HOUR_MS - 9 * HOUR_MS;
   const user = await prisma.user.create({ data: { address: cfg.owner.toLowerCase() } });
   const agent = await prisma.agent.create({
     data: {
@@ -162,6 +162,61 @@ async function main() {
   const fresh = await prisma.agent.findUniqueOrThrow({ where: { id: agent.id } });
   const ret = (d3!.equityAfter / fresh.startingCash - 1) * 100;
   check("the return is a small number, not a deposit or a withdrawal", Math.abs(ret) < 2, `${ret.toFixed(3)}% after a $50 withdrawal and a $30 deposit`);
+
+  console.log("\nAn exit the vault refuses stays an order to sell");
+  // A plan that buys whenever it has no position, so the next hour opens one.
+  const always: Plan = { markets: ["ETH"], kind: "entry_exit", entry: [{ signal: "rsi", op: "<", value: 101 }], exit: { stopLossPct: 15 }, filters: [], sizePctOfCash: 10 };
+  await prisma.agent.update({ where: { id: agent.id }, data: { plan: always as unknown as Prisma.InputJsonValue } });
+  const stateNow = () => prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } });
+  const last = async () => (await decisions()).at(-1)!;
+  await run(h + 3 * HOUR_MS);
+  const b2 = await last();
+  check("hour 4: buys again", b2.action === "buy" && !!b2.txHash, b2.explanation);
+  const held = (await chain.snapshot(vault, WETH)).token;
+  await asOwner(vault, va, "setPaused", [true]);
+  await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: (b2.fillPrice ?? 0) * 1.4 } }); // the stop is hit
+  await run(h + 4 * HOUR_MS);
+  const refused = await last();
+  check(
+    "hour 5: the stop is reached, the vault is paused, and the decision says the position is still open",
+    refused.action === "hold" && refused.execError === "the vault is paused" && /but the position was not sold: the vault is paused\. It is still open, and the agent tries again next hour\.$/.test(refused.explanation),
+    refused.explanation,
+  );
+  check("hour 5: nothing was sold, and the exit is kept open on the record", (await chain.snapshot(vault, WETH)).token === held && (await stateNow()).exitPendingKind === "stop loss");
+  await asOwner(vault, va, "setPaused", [false]);
+  // By the next hour the position is no longer past its stop (its entry price is put back at the market's).
+  await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: refused.markPrice } });
+  await run(h + 5 * HOUR_MS);
+  const finished = await last();
+  check(
+    "hour 6: the vault is open again, and the position is sold although the stop no longer holds",
+    finished.action === "sell" && !!finished.txHash && (await chain.snapshot(vault, WETH)).token === 0n && /^Sell\. Finishing the sale from /.test(finished.explanation),
+    finished.explanation,
+  );
+  check("hour 6: no exit is left open", (await stateNow()).exitPendingSince === null && (await stateNow()).qty === 0);
+
+  console.log("\nA buy leaves room in the vault's daily limit for its own sale");
+  // Leave $40 of the daily limit, by the vault's own count of what was traded today.
+  const used = 5000 - (await chain.snapshot(vault, WETH)).remainingUsd;
+  await asOwner(vault, va, "setLimits", [100, parseUnits((used + 40).toFixed(6), 18)]);
+  const room = (await chain.snapshot(vault, WETH)).remainingUsd;
+  check("the vault has about $40 left to trade today", near(room, 40, 0.01), `$${room.toFixed(4)}`);
+  await run(h + 6 * HOUR_MS);
+  const small = await last();
+  check(
+    "hour 7: the buy is cut to what leaves room for its sale, and says so",
+    small.action === "buy" && near(small.fillNotional ?? 0, (room * 0.98) / 2.2, 0.01) && /so that the sale of this position still fits in the vault's daily trading limit\.$/.test(small.explanation),
+    small.explanation,
+  );
+  await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: (small.fillPrice ?? 0) * 1.4 } }); // the stop is hit
+  await run(h + 7 * HOUR_MS);
+  const out = await last();
+  check(
+    "hour 8: the stop sells all of it inside the same day's limit",
+    out.action === "sell" && out.execError === null && out.qtyAfter === 0 && (await chain.snapshot(vault, WETH)).token === 0n && !/still held/.test(out.explanation),
+    out.explanation,
+  );
+  await asOwner(vault, va, "setLimits", [100, parseUnits("5000", 18)]);
 
   await prisma.$disconnect();
   console.log(failures.length ? `\n${failures.length} check(s) FAILED:\n  ${failures.join("\n  ")}` : "\nAll checks passed.");

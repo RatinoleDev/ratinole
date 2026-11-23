@@ -167,6 +167,16 @@ script stops at anything it does not recognise: a misspelt option, or a word too
 - **What a user sees when an order fails.** The decision for that hour is a hold with the reason (the vault is
   paused, its daily limit is used up, the pool price was outside its slippage limit, and so on). Nothing is
   retried later in the hour.
+- **A sale that did not complete is tried again every hour.** When a take profit, a stop or an exit rule is
+  reached and the position cannot be sold (the order was refused or late, or the daily limit let only part of
+  it go), the exit stays open. The agent sells in the first hour it can, even if the price has come back by
+  then, and each decision until then says the position is still open. Pausing and resuming the agent clears
+  an open exit: the exits are then checked afresh.
+- **The high a trailing stop follows is never missed.** After hours the agent could not read (stale prices, or
+  the engine was down), it looks at every hourly close since the last one it saw.
+- **A second price feed takes over when the first is behind.** If Binance answers with old candles, Hyperliquid
+  is used for that hour, and each decision names the feed its prices came from. The log line is
+  `candle feed is behind`.
 - **Missed hours are never traded late.** An order is only placed in the first 20 minutes of its hour, and the
   vault itself refuses it 25 minutes into the hour. An order that was signed but got stuck on the way can
   therefore never trade later. Until that moment the engine treats it as "not known yet" and places nothing
@@ -176,8 +186,13 @@ script stops at anything it does not recognise: a misspelt option, or a word too
   agent buys.
 - **An agent stops itself**, with the reason shown to its owner, when the vault is emptied, the agent's access
   is revoked, the vault changes owner, or the vault's token settings are changed.
-- **Orders fit the vault's daily limit.** A buy is made smaller, and a sale is split over the following hours,
-  when the limit has less room than the order needs. The decision says so.
+- **Orders fit the vault's daily limit.** The limit counts buys and sales together. A buy is never larger than
+  what is left of the limit divided by 2.2, so the position it opens can be sold in the same 24-hour window,
+  stop loss included (a plan with no exit may use all of it). A sale larger than what is left is split over
+  the following hours. The decision says so each time, with the size the order really had.
+- **Launch checks.** A live agent is not launched when one of its orders would be under $1, or when the
+  vault's daily limit cannot hold one order and the sale that follows it. The message says which, with the
+  numbers, and what to change.
 - **A vault that changes owner** (a transfer the new wallet accepts within 7 days, or a recovery) starts with
   the agent's access switched off. The new owner switches it on again on the Vault page and launches their
   own agent.

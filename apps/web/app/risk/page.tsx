@@ -29,7 +29,8 @@ export default function Risk() {
         An agent reads the market and decides once an hour. A stop loss, a take profit or a trailing stop is checked at
         that moment and not in between. If the price moves fast within the hour, the position is sold at the price of the
         next check, which can be well past the level you set. An order that is refused, or that cannot be placed early in
-        the hour, is not placed late: the agent waits for the next hour and says why.
+        the hour, is not placed late: the agent waits for the next hour and says why. A sale that could not be made is
+        tried again every hour, and the position stays open until one goes through.
       </p>
       <h2>Software and data can fail</h2>
       <p>

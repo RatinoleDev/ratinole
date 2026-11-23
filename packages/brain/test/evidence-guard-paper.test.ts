@@ -48,16 +48,18 @@ describe("runGuard", () => {
     dailyLossCapPct: 3,
     regime: "trending",
     standsAsideWhenStressed: true,
-    costPct: 0.1,
   };
   it("passes a normal buy", () => {
     const g = runGuard(base);
     expect(vetoes(g)).toEqual([]);
-    expect(g.map((c) => c.check)).toEqual(["Fresh data", "Position size", "Daily loss", "Market stress", "Pool depth"]);
+    // Only what the guard really checks is listed. What the vault enforces by itself is not a row here.
+    expect(g.map((c) => c.check)).toEqual(["Fresh data", "Trade size", "Daily loss", "Market stress"]);
+    expect(g[1]!.detail).toBe("The plan uses 25% of cash per trade, within your 35% cap.");
     expect(g[2]!.detail).toBe("Down 0.4% today, under your 3% cap.");
+    expect(g[3]!.detail).toBe("The market is trending, not stressed.");
   });
   it("vetoes oversize, past the daily loss cap, stressed markets and stale data", () => {
-    expect(vetoes(runGuard({ ...base, sizePctOfCash: 40 })).map((c) => c.check)).toEqual(["Position size"]);
+    expect(vetoes(runGuard({ ...base, sizePctOfCash: 40 }))).toEqual([{ check: "Trade size", pass: false, detail: "The plan uses 40% of cash per trade, over your 35% cap." }]);
     expect(vetoes(runGuard({ ...base, dailyPnlPct: -3.2 })).map((c) => c.check)).toEqual(["Daily loss"]);
     expect(vetoes(runGuard({ ...base, regime: "stressed" })).map((c) => c.check)).toEqual(["Market stress"]);
     expect(vetoes(runGuard({ ...base, fresh: { ok: false, detail: "old" } })).map((c) => c.check)).toEqual(["Fresh data"]);
@@ -65,7 +67,17 @@ describe("runGuard", () => {
   it("never blocks a sell with buy-side limits", () => {
     const g = runGuard({ ...base, action: "sell", sizePctOfCash: 90, dailyPnlPct: -10, regime: "stressed" });
     expect(vetoes(g)).toEqual([]);
-    expect(g.map((c) => c.check)).toEqual(["Fresh data", "Pool depth"]);
+    expect(g.map((c) => c.check)).toEqual(["Fresh data"]);
+  });
+  it("never writes a change of nothing as a loss or a gain", () => {
+    const loss = (dailyPnlPct: number) => runGuard({ ...base, dailyPnlPct })[2]!.detail;
+    expect(loss(-0.04)).toBe("Flat today. Your cap is a 3% daily loss.");
+    expect(loss(0.04)).toBe("Flat today. Your cap is a 3% daily loss.");
+    expect(loss(0)).toBe("Flat today. Your cap is a 3% daily loss.");
+    expect(loss(1.26)).toBe("Up 1.3% today. Your cap is a 3% daily loss.");
+    // At the cap to one decimal it is "at", not "past".
+    expect(loss(-3.04)).toBe("Down 3.0% today, at your 3% cap. No new buys until the next UTC day.");
+    expect(loss(-3.2)).toBe("Down 3.2% today, past your 3% cap. No new buys until the next UTC day.");
   });
   it("only checks market stress when the plan asks for it", () => {
     expect(runGuard({ ...base, standsAsideWhenStressed: false, regime: "stressed" }).some((c) => c.check === "Market stress")).toBe(false);

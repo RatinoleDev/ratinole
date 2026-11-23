@@ -116,7 +116,7 @@ describe.skipIf(!hasDb)("live agents", () => {
     await run(chain, agent.id, H0);
     const [d] = await decisions(agent.id);
     expect(d).toMatchObject({ action: "hold", txHash: null, execError: "the vault's daily trading limit is used up", fillSide: null, cashAfter: 1000, qtyAfter: 0 });
-    expect(d!.explanation).toMatch(/but the buy order did not go through: the vault's daily trading limit is used up\. Nothing changed\.$/);
+    expect(d!.explanation).toBe("Hold. A scheduled purchase is due, but nothing was bought: the vault's daily trading limit is used up.");
     expect(chain.stable).toBe(usdg(1000));
     expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "failed", error: "the vault's daily trading limit is used up" });
   });
@@ -389,7 +389,8 @@ describe.skipIf(!hasDb)("live agents", () => {
     await run(chain, agent.id, H0, 4);
     const [d] = await decisions(agent.id);
     expect(d).toMatchObject({ action: "buy", txHash, fillNotional: 100 });
-    expect(d!.explanation).toMatch(/^Buy\. This order was placed earlier in the hour by a run that was interrupted/);
+    // The evidence and guard rows stored with it are this later run's, and the record says so.
+    expect(d!.explanation).toMatch(/^Buy\. This order was placed earlier in the hour by a run that was interrupted before it could write down its reasons\. The readings shown with it were taken afterwards\. Bought \$/);
     expect(d!.cashAfter).toBeCloseTo(900, 6);
     expect(d!.qtyAfter).toBeCloseTo(fromUnits(amountOut, 18), 12);
     expect(chain.asked).toBe(0);
@@ -408,32 +409,79 @@ describe.skipIf(!hasDb)("live agents", () => {
     expect(chain.done[1]!.req.amountIn).toBeLessThan(bought);
     expect(fromUnits(chain.done[1]!.req.amountIn, 18) * open(H0 + HOUR_MS)).toBeLessThanOrEqual(40);
     expect(d.qtyAfter).toBeGreaterThan(0);
-    expect(d.explanation).toMatch(/allowed only part of the position to be sold/);
-    // Next hour the limit has room again: the rest goes.
+    expect(d.explanation).toMatch(/ on the trade after costs\. 0\.\d+ ETH is still held\. The vault's daily trading limit allowed only part of the position to be sold\. The agent tries to sell the rest every hour\.$/);
+    // The exit stays open on the record.
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } })).toMatchObject({ exitPendingSince: new Date(H0 + HOUR_MS), exitPendingKind: "stop loss" });
+    // Next hour the limit has room again. By now the position is no longer past its stop (its entry price is set to
+    // the market's), so nothing asks for a sale on its own. The rest goes all the same: the exit was reached.
     chain.remainingUsd = 100_000;
-    await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: open(H0 + 2 * HOUR_MS) * 1.3 } });
+    await prisma.agentState.update({ where: { agentId: agent.id }, data: { avgEntry: open(H0 + 2 * HOUR_MS) } });
     await run(chain, agent.id, H0 + 2 * HOUR_MS);
-    expect((await decisions(agent.id))[2]).toMatchObject({ action: "sell", qtyAfter: 0 });
+    const rest = (await decisions(agent.id))[2]!;
+    expect(rest).toMatchObject({ action: "sell", qtyAfter: 0 });
+    expect(rest.explanation).toMatch(/^Sell\. Finishing the sale from \d\d:00 UTC on \d{1,2} [A-Z][a-z]{2} \(stop loss reached\)\. Now [+−]?\d+\.\d% since buying\. Sold /);
     expect(chain.token).toBe(0n);
+    expect(await prisma.agentState.findUniqueOrThrow({ where: { agentId: agent.id } })).toMatchObject({ qty: 0, exitPendingSince: null, exitPendingKind: null, peakSeenTo: null });
   });
 
-  it("makes a buy smaller to fit the daily limit, and says so; with no room left it does not send at all", async () => {
+  it("a buy leaves room in the daily limit for the sale of what it bought, and says so", async () => {
+    // The limit counts buys and sales together. $50 is left of it: a $49 buy would leave nothing to sell with.
     const chain = new PretendChain();
     chain.remainingUsd = 50;
     const agent = await launch(chain);
     await run(chain, agent.id, H0);
     const [d] = await decisions(agent.id);
     expect(d!.action).toBe("buy");
-    expect(d!.fillNotional).toBeCloseTo(49, 6);
-    expect(d!.explanation).toMatch(/Bought \$49\.00 of ETH at \$[\d,.]+\. The vault's daily trading limit made this order smaller than planned\.$/);
+    expect(d!.fillNotional).toBeCloseTo((50 * 0.98) / LIVE.exitRoomFactor, 5);
+    // The size printed is the order's own, not the plan's.
+    expect(d!.explanation).toMatch(/Bought \$22\.27 of ETH at \$[\d,.]+, 2\.2% of cash\. The order is smaller than the 10% the plan asks for, so that the sale of this position still fits in the vault's daily trading limit\.$/);
+    // What is left of the limit covers selling everything that was bought.
+    expect(chain.remainingUsd * 0.98).toBeGreaterThan(fromUnits(chain.token, 18) * open(H0) * 1.2);
+  });
 
-    await wipe();
+  it("a plan that never sells may use all that is left of the daily limit", async () => {
+    const chain = new PretendChain();
+    chain.remainingUsd = 50;
+    const agent = await launch(chain, { ...dca, exit: {} });
+    await run(chain, agent.id, H0);
+    const [d] = await decisions(agent.id);
+    expect(d!.fillNotional).toBeCloseTo(49, 6);
+    expect(d!.explanation).toMatch(/Bought \$49\.00 of ETH at \$[\d,.]+, 4\.9% of cash\. The vault's daily trading limit made this order smaller than the 10% the plan asks for\.$/);
+  });
+
+  it("with too little left of the daily limit it does not send at all, and says which it is", async () => {
     const none = new PretendChain();
     none.remainingUsd = 0.5;
-    const second = await launch(none);
-    await run(none, second.id, H0);
+    const first = await launch(none);
+    await run(none, first.id, H0);
     expect(none.asked).toBe(0);
-    expect((await decisions(second.id))[0]).toMatchObject({ action: "hold", execError: "the vault's daily trading limit is used up" });
+    expect((await decisions(first.id))[0]).toMatchObject({ action: "hold", execError: "the vault's daily trading limit is used up" });
+
+    // $2 left: enough for the smallest buy, not for that buy and its sale.
+    await wipe();
+    const tight = new PretendChain();
+    tight.remainingUsd = 2;
+    const second = await launch(tight);
+    await run(tight, second.id, H0);
+    expect(tight.asked).toBe(0);
+    const [d] = await decisions(second.id);
+    expect(d).toMatchObject({ action: "hold", execError: "the vault's daily trading limit has too little left for a buy and the sale that would follow it" });
+    expect(d!.explanation).toBe("Hold. A scheduled purchase is due, but nothing was bought: the vault's daily trading limit has too little left for a buy and the sale that would follow it.");
+  });
+
+  it("an order booked by a later run still says what size it was and why it was smaller", async () => {
+    const chain = new PretendChain();
+    chain.remainingUsd = 50;
+    chain.drop = "afterSend";
+    const agent = await launch(chain);
+    await expect(run(chain, agent.id, H0)).rejects.toThrow(OrderPendingError);
+    expect(await prisma.liveOrder.findFirstOrThrow()).toMatchObject({ status: "pending", note: expect.stringMatching(/^The order is smaller than the 10% the plan asks for/) });
+    chain.drop = null;
+    expect(await run(chain, agent.id, H0, 4)).toMatchObject({ decided: 1 });
+    expect(chain.asked).toBe(1);
+    const [d] = await decisions(agent.id);
+    expect(d!.action).toBe("buy");
+    expect(d!.explanation).toMatch(/Bought \$22\.27 of ETH at \$[\d,.]+, 2\.2% of cash\. The order is smaller than the 10% the plan asks for, so that the sale of this position still fits in the vault's daily trading limit\.$/);
   });
 
   it("when the chain cannot be reached before anything is signed, the hour is tried again, not written off", async () => {

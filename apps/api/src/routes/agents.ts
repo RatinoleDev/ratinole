@@ -1,5 +1,5 @@
 /** Agents, paper and live: launch, list, pause/resume, decision log, and the wallet overview. */
-import { HOUR_MS, maxDrawdownPct, type Plan } from "@rationale/brain";
+import { HOUR_MS, hasExit, maxDrawdownPct, usd, type Plan } from "@rationale/brain";
 import { LIVE, LIVE_TOKENS, PAPER, couldBeWorthADollar, isMarketId, strayTokensArePosition, type CurvePointDTO, type OverviewDTO } from "@rationale/config";
 import type { Prisma, User } from "@rationale/db";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -25,6 +25,8 @@ type LiveCheck =
       tokenQty: number;
       tokenUsd: number | null;
       price: number | null;
+      /** The vault's own limit on a day's trading, buys and sales together, in dollars. */
+      dailyLimitUsd: number;
     }
   | { ok: false; status: number; error: string; message: string };
 const DecisionsQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), before: z.string().datetime().optional() });
@@ -73,7 +75,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         "vault_empty",
         price == null && info.token.qty > 0
           ? `Your vault holds less than $${LIVE.minVaultUsd} of USDG, and its ${LIVE_TOKENS[market].symbol} has no oracle price right now. Deposit USDG, or try again in a moment.`
-          : `Deposit at least $${LIVE.minVaultUsd} of USDG into your vault first.`,
+          : `Your vault holds ${usd(equity)}, and a live agent needs at least $${LIVE.minVaultUsd} in it. Deposit more USDG first.`,
       );
     }
     // The cap counts everything in the vault that the agent's key could trade, not just this agent's market.
@@ -89,7 +91,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         return no(409, "beta_cap", `While the contracts have not been audited, a vault may hold at most $${cap.toLocaleString("en-US")} when a live agent starts. Yours holds about $${Math.floor(total).toLocaleString("en-US")}.`);
       }
     }
-    return { ok: true, vault: info.vault, cash: info.cash, tokenQty: info.token.qty, tokenUsd, price };
+    return { ok: true, vault: info.vault, cash: info.cash, tokenQty: info.token.qty, tokenUsd, price, dailyLimitUsd: info.dailyLimitUsd };
   }
 
   /**
@@ -123,7 +125,7 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         where: { agentId: a.id },
         data: {
           qty: remaining,
-          ...(remaining === 0 ? { avgEntry: null, peak: null } : {}),
+          ...(remaining === 0 ? { avgEntry: null, peak: null, peakSeenTo: null, exitPendingSince: null, exitPendingKind: null } : {}),
           dayStartEquity: state.dayStartEquity * scale,
           lastEquity: left,
           ...(state.peakEquity != null ? { peakEquity: state.peakEquity * scale } : {}),
@@ -192,7 +194,34 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         })()
       : null;
     if (start && start.equity < LIVE.minVaultUsd) {
-      return sendError(reply, 409, "vault_empty", `Deposit at least $${LIVE.minVaultUsd} of USDG into your vault first.`);
+      return sendError(reply, 409, "vault_empty", `Your vault holds ${usd(start.equity)} this agent can start with, and a live agent needs at least $${LIVE.minVaultUsd}. Deposit more USDG first.`);
+    }
+    if (vault?.ok && start) {
+      // What one order of this plan would be right now. An agent whose every order is under the smallest one the
+      // engine places would hold forever, and say so every hour: better to say it once, here.
+      const order = (start.cash * plan.sizePctOfCash) / 100;
+      if (start.qty === 0 && order < LIVE.minOrderUsd) {
+        return sendError(
+          reply,
+          409,
+          "order_too_small",
+          `With ${usd(start.cash)} in the vault and ${plan.sizePctOfCash}% per trade, one order would be ${usd(order)}, under the ${usd(LIVE.minOrderUsd)} minimum. Deposit more USDG, or use a larger size per trade.`,
+        );
+      }
+      // The vault's daily limit counts buys and sales together. If one order and the sale that follows it do not
+      // both fit, the agent could buy and then be unable to sell that day, stop loss included.
+      const sells = hasExit(plan);
+      const need = order * (sells ? LIVE.exitRoomFactor : 1);
+      if (vault.dailyLimitUsd < need) {
+        return sendError(
+          reply,
+          409,
+          "limit_too_small",
+          sells
+            ? `One order of this agent is about ${usd(order)}, and your vault's daily trading limit is ${usd(vault.dailyLimitUsd)}. The limit counts buys and sales together, so it has to cover a buy and the sale that follows: at least ${usd(Math.ceil(need))}. Raise it on the Vault page, or use a smaller size per trade.`
+            : `One order of this agent is about ${usd(order)}, over your vault's daily trading limit of ${usd(vault.dailyLimitUsd)}. Raise the limit on the Vault page, or use a smaller size per trade.`,
+        );
+      }
     }
     const agent = await deps.prisma.agent.create({
       data: {
@@ -288,6 +317,11 @@ export function agentRoutes(app: FastifyInstance, deps: ApiDeps) {
         // Resuming owes decisions from the next hour; paused hours are never backfilled.
         data: body.data.status === "active" ? { status: "active", pausedReason: null, owedFrom: new Date(nextHour(now())) } : { status: "paused", pausedReason: null },
       });
+      // An exit left open by a sale that did not complete belongs to the run that was stopped. Resuming starts
+      // the exits afresh: each is checked again against the prices of the hour the agent comes back.
+      if (body.data.status === "active" && a.mode === "live") {
+        await deps.prisma.agentState.updateMany({ where: { agentId: a.id }, data: { exitPendingSince: null, exitPendingKind: null } });
+      }
     }
     return (await loadAgentDTO(a.id))!.dto;
   });

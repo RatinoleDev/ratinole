@@ -513,7 +513,7 @@ export function Thinks({ latest: d, markets }: { latest: DecisionDTO | null; mar
                 {g.detail}
               </div>
             ))
-          : ["Fresh market data", "Position size against your cap", "Daily loss against your cap", "Market stress, if your rule stands aside"].map(
+          : ["Fresh market data", "Trade size against your cap", "Daily loss against your cap", "Market stress, if your rule stands aside"].map(
               (c) => (
                 <div key={c}>
                   <i className="neutral">Check</i>

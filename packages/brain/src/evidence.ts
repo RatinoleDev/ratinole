@@ -39,7 +39,7 @@ const OP_SHORT: Record<Condition["op"], string> = {
 
 function ruleValue(spec: SignalSpec, v: number): string {
   const n = Number.isInteger(v) ? String(Math.abs(v)) : String(Math.abs(Number(v.toFixed(2))));
-  const sign = v < 0 ? "−" : spec.unit === "%" && v > 0 ? "+" : "";
+  const sign = v < 0 ? "−" : spec.unit === "%" && v > 0 && !spec.unsigned ? "+" : "";
   return `${sign}${n}${spec.unit === "%" ? "%" : spec.unit === "x" ? "×" : ""}`;
 }
 
@@ -82,7 +82,7 @@ export function readCondition(src: SeriesSource, i: number, rc: ResolvedConditio
   const previous = i > 0 ? (series[i - 1] ?? null) : null;
   const rule = `rule: ${OP_SHORT[rc.cond.op]} ${ruleValue(rc.spec, rc.cond.value)}`;
   if (current == null) {
-    return { rc, holds: false, current, previous, item: { name: conditionName(rc), value: `not enough history (${rule})`, score: 0 } };
+    return { rc, holds: false, current, previous, item: { name: conditionName(rc), value: `${missingText(rc.spec.id)} (${rule})`, score: 0 } };
   }
   const holds = conditionHolds(rc.cond.op, rc.cond.value, current, previous);
   const score = scoreCondition(rc.cond.op, rc.cond.value, current, previous, rc.spec.scale);
@@ -93,6 +93,11 @@ export function readCondition(src: SeriesSource, i: number, rc: ResolvedConditio
     previous,
     item: { name: conditionName(rc), value: `${formatSignalValue(rc.spec.id as SignalId, current)} (${rule})`, score },
   };
+}
+
+/** Why a condition has no reading. Funding comes from its own feed, so a gap there is not a lack of price history. */
+export function missingText(id: SignalId): string {
+  return id === "funding_rate" ? "no funding data" : "not enough history";
 }
 
 export function resolveConditions(conds: readonly Condition[], prefix: "entry" | "exit", windows: Record<string, number>): ResolvedCondition[] {
@@ -166,7 +171,9 @@ export function combineConfidence(rule: EvidenceItem[], context: EvidenceItem[])
   return Math.max(0, Math.min(100, Math.round(50 + combined / 2)));
 }
 
+/** A signed percentage. A change that rounds to nothing is plain "0.0%", never "+0.0%" or "−0.0%". */
 export function pct(v: number, digits = 1): string {
   const s = Math.abs(v).toFixed(digits);
-  return `${v > 0 ? "+" : v < 0 ? "−" : ""}${s}%`;
+  const zero = Number(s) === 0;
+  return `${zero ? "" : v > 0 ? "+" : "−"}${s}%`;
 }

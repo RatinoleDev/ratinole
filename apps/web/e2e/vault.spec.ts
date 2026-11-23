@@ -24,7 +24,7 @@ const chainConfig = {
   operator: AGENT,
   stable: { symbol: "USDG", address: USDG, decimals: 6 },
   tokens: [{ market: "ETH", symbol: "WETH", address: WETH, decimals: 18 }],
-  limits: { minVaultUsd: 5, maxVaultUsd: 500, defaultSlippageBps: 100, defaultDailyLimitUsd: 200 },
+  limits: { minVaultUsd: 5, maxVaultUsd: 500, defaultSlippageBps: 100, defaultDailyLimitUsd: 500 },
 };
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -292,7 +292,9 @@ test.describe("vault page", () => {
     await mockChain(page, chain);
     await page.goto("/app/vault");
     await expect(page.getByRole("button", { name: "Create my vault" })).toBeVisible();
-    await expect(page.getByText("Daily trading limit $200")).toBeVisible();
+    await expect(page.getByText("Daily trading limit $500")).toBeVisible();
+    // The limit counts buys and sales together, and the page says what that means for one buy.
+    await expect(page.getByText(/Buys and sales both count towards it\. An agent that has an exit rule keeps each buy under \$227, so that it can always sell what it bought on the same day\./)).toBeVisible();
   });
 
   test("a token the oracle has no price for is left out of the total, and said so", async ({ page }) => {

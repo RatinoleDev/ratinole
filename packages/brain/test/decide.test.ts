@@ -86,7 +86,7 @@ describe("decide: entries", () => {
     const out = decide(ctx(), { candles, hour, state: initialState(10_000, hour), fillPrice: last.c });
     expect(out.decision.action).toBe("hold");
     expect(out.decision.guard[0]).toMatchObject({ check: "Fresh data", pass: false });
-    expect(out.decision.explanation).toMatch(/^Hold\. The latest candle closed at .* 2 hours before this run/);
+    expect(out.decision.explanation).toMatch(/^Hold\. The newest price data ends at \d\d:00 UTC, 2 hours before this decision\. Waiting for fresh data\.$/);
   });
 
   it("holds when the next hour's opening price is not known", () => {
@@ -251,7 +251,9 @@ describe("decide: funding", () => {
     const plan: Partial<Plan> = { entry: [{ signal: "funding_rate", op: "<", value: 0 }] };
     const out = decide(ctx(plan, 0), { candles, hour, state: initialState(10_000, hour), fillPrice });
     expect(out.decision.action).toBe("hold");
-    expect(out.decision.evidence[0]!.value).toMatch(/not enough history/);
+    // Funding comes from its own feed: a gap there is not a lack of price history, and is not called one.
+    expect(out.decision.evidence[0]!.value).toBe("no funding data (rule: below 0%)");
+    expect(out.decision.explanation).toMatch(/^Hold\. Waiting until funding is negative \(no funding data\)\./);
   });
 });
 
@@ -274,7 +276,7 @@ describe("decide: live fills", () => {
     expect(out.decision.explanation).toMatch(/Bought \$2,500\.00 of ETH at \$1,922\.12/);
   });
 
-  it("a buy order that did not go through is a hold that says why, and changes nothing", () => {
+  it("a buy that was not made is a hold that says why, and changes nothing", () => {
     const candles = series(falling(12));
     const { hour, fillPrice } = at(candles);
     const state = initialState(10_000, hour);
@@ -282,7 +284,7 @@ describe("decide: live fills", () => {
     expect(out.decision.action).toBe("hold");
     expect(out.fill).toBeNull();
     expect(out.state).toEqual(state);
-    expect(out.decision.explanation).toMatch(/^Hold\. The entry rules are met \(confidence \d+%\), but the buy order did not go through: the vault's daily trading limit is used up\. Nothing changed\.$/);
+    expect(out.decision.explanation).toMatch(/^Hold\. The entry rules are met \(confidence \d+%\), but nothing was bought: the vault's daily trading limit is used up\.$/);
   });
 
   it("books a real sell: cash received is the value minus the pool fee", () => {
@@ -299,7 +301,7 @@ describe("decide: live fills", () => {
     expect(out.decision.explanation).toMatch(/^Sell\. Stop loss reached/);
   });
 
-  it("a sell order that did not go through keeps the position and says why", () => {
+  it("a sale that was not made keeps the position, says so, and says that it is still open", () => {
     const candles = series(falling(3, 0.001));
     const { hour, fillPrice, close } = at(candles);
     const state = inPosition(hour, close * 1.06);
@@ -307,7 +309,9 @@ describe("decide: live fills", () => {
     expect(out.decision.action).toBe("hold");
     expect(out.fill).toBeNull();
     expect(out.state.qty).toBe(1);
-    expect(out.decision.explanation).toMatch(/^Hold\. Stop loss reached: .* stop at −4%, but the sell order did not go through: the pool price was worse than the vault's slippage limit\. Nothing changed\.$/);
+    expect(out.decision.explanation).toMatch(
+      /^Hold\. Stop loss reached: .* stop at −4%, but the position was not sold: the pool price was worse than the vault's slippage limit\. It is still open, and the agent tries again next hour\.$/,
+    );
   });
 
   it("refuses a fill for the wrong side", () => {
@@ -323,6 +327,6 @@ describe("decide: live fills", () => {
     const state = initialState(10_000, hour);
     const out = decide(ctx(), { candles, hour, state, fillPrice, liveFill: { ok: false, reason: "x" } });
     expect(out.decision.action).toBe("hold");
-    expect(out.decision.explanation).not.toMatch(/did not go through/);
+    expect(out.decision.explanation).not.toMatch(/nothing was bought|was not sold/);
   });
 });
