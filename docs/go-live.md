@@ -88,10 +88,11 @@ sudo -u ratinole -H bash -lc 'cd ~/app && <command>'
    the server, so whoever gets into the server would get the admin too, and the deployer key is removed after
    deploying, which would throw the admin away for good.
 
-   **With two wallets and no third**, the deployer key can own the Safe:
+   **With two wallets and no third**, the deployer key can own the Safe. One command then does this step and
+   the next, and there is no Safe address to carry over:
 
    ```bash
-   node scripts/go-live.mjs safe deployer
+   node scripts/go-live.mjs deploy deployer
    ```
 
    The deployer key is then your **admin key, for good**. Back it up before you go on

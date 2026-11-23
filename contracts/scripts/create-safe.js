@@ -10,6 +10,7 @@
 // server: the deployer's own address is refused, and so is any address in SAFE_FORBIDDEN_OWNERS (the agent's key).
 // One exception, chosen by the owner and never by default: SAFE_OWNER_IS_DEPLOYER=1 creates a Safe whose one
 // owner is the deployer key itself. That key is then the admin key, and must be backed up and kept off the server.
+const fs = require('fs');
 const { ethers, network } = require('hardhat');
 
 const SAFE = {
@@ -65,6 +66,10 @@ async function main() {
   const address = created.args.proxy;
   // Shown before the read-back: if the connection drops now, the address is not lost.
   console.log(`Created at ${address}. Checking it...`);
+  // Written down too, when asked: the next step then finds it without anyone carrying it over by hand.
+  if (process.env.SAFE_ADDRESS_FILE) {
+    fs.writeFileSync(process.env.SAFE_ADDRESS_FILE, `${JSON.stringify({ safe: address, owners, threshold, network: network.name, createdAt: new Date().toISOString() }, null, 2)}\n`);
+  }
 
   // Read it back: the owners and threshold must be exactly what was asked for.
   const safe = await ethers.getContractAt(safeAbi, address);

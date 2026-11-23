@@ -39,6 +39,7 @@ const USAGE = [
   "  safe 0xYou                create your Safe with one owner",
   "  safe 0xYou,0xOther 2      ... or several owners, and how many must approve",
   "  deploy 0xSafeAddress      deploy the contracts",
+  "  deploy deployer           two wallets, one step: the deployer key becomes the admin (no Safe address to handle)",
   "  verify                    run the checks on the deployed contracts again",
   "  open                      turn live trading on for this site",
   "  close                     pause live trading",
@@ -265,6 +266,34 @@ async function safeAt(address) {
     return null;
   }
 }
+/**
+ * Two wallets, one step: the Safe owned by the deployer key, made here so the owner never has to carry its
+ * address from one command to the next. Its address is written down as soon as it exists; a second run (after a
+ * failure further on) finds it there and uses it again, instead of creating another.
+ */
+const safeFile = join(root, "contracts", "deployments", `${network}.safe.json`);
+async function deployerSafe(deployer) {
+  const saved = () => {
+    try {
+      const a = JSON.parse(readFileSync(safeFile, "utf8")).safe;
+      return isAddress(a) ? a : null;
+    } catch {
+      return null;
+    }
+  };
+  const before = saved();
+  const there = before ? await safeAt(before) : null;
+  if (there && there.owners.length === 1 && same(there.owners[0], deployer)) {
+    console.log(`\nUsing the Safe created earlier: ${before}`);
+    return before;
+  }
+  if (!hardhat("create-safe.js", { SAFE_OWNERS: deployer, SAFE_THRESHOLD: "1", SAFE_FORBIDDEN_OWNERS: operatorAddress() ?? "", SAFE_OWNER_IS_DEPLOYER: "1", SAFE_ADDRESS_FILE: safeFile })) {
+    fail("The Safe could not be created. Read the message above. The contracts were not deployed. You can run the same command again.");
+  }
+  const made = saved();
+  if (!made || made === before) fail(`The Safe was created, but its address was not written down. Find SAFE_ADDRESS in the lines above and run:  node scripts/go-live.mjs deploy <that address>${rehearsalFlag}`);
+  return made;
+}
 /** The same, for a step that needs it: stops if there is no Safe there on this chain. */
 async function readSafe(address) {
   const code = await pub.getCode({ address });
@@ -357,10 +386,10 @@ if (cmd === "status") {
   const deployer = deployerAddress();
   if (!deployer) fail("No deployer key yet. Create it with: node scripts/keys.mjs create deployer");
   await confirm("CREATE", `This creates a Safe on Robinhood Chain owned by this server's deployer key:\n  ${deployer}\n\nThat key becomes your ADMIN key, for good:\n${ADMIN_KEY_RULES}`);
-  if (!hardhat("create-safe.js", { SAFE_OWNERS: deployer, SAFE_THRESHOLD: "1", SAFE_FORBIDDEN_OWNERS: operatorAddress() ?? "", SAFE_OWNER_IS_DEPLOYER: "1" })) {
+  if (!hardhat("create-safe.js", { SAFE_OWNERS: deployer, SAFE_THRESHOLD: "1", SAFE_FORBIDDEN_OWNERS: operatorAddress() ?? "", SAFE_OWNER_IS_DEPLOYER: "1", SAFE_ADDRESS_FILE: safeFile })) {
     fail("That step failed. Read the message above. If it printed a Safe address, keep it.");
   }
-  console.log(`Keep the SAFE_ADDRESS above. Next: node scripts/go-live.mjs deploy <that address>${rehearsalFlag}`);
+  console.log(`Next: node scripts/go-live.mjs deploy deployer${rehearsalFlag}   (it uses the Safe just created)`);
 } else if (cmd === "safe") {
   const owners = arg.split(",").filter(Boolean);
   if (!owners.length || !owners.every(isAddress)) fail("Give the wallet(s) that will own the Safe: node scripts/go-live.mjs safe 0xYourWallet   or   safe 0xYourWallet,0xSecondSigner 2\nWith no wallet of your own, the deployer key can own it:  node scripts/go-live.mjs safe deployer");
@@ -384,7 +413,9 @@ if (cmd === "status") {
   }
   console.log(`Keep the SAFE_ADDRESS above. Next: node scripts/go-live.mjs deploy <that address>${rehearsalFlag}`);
 } else if (cmd === "deploy") {
-  if (!isAddress(arg)) fail("Give your Safe's address: node scripts/go-live.mjs deploy 0xSafeAddress");
+  // `deploy deployer`: two wallets and one step. The Safe is made here, owned by the deployer key.
+  const oneStep = arg === "deployer";
+  if (!oneStep && !isAddress(arg)) fail("Give your Safe's address: node scripts/go-live.mjs deploy 0xSafeAddress\nWith two wallets and no Safe of your own, one step does both:  node scripts/go-live.mjs deploy deployer");
   const operator = operatorAddress();
   if (!operator) fail("No operator key yet. Create it with: node scripts/keys.mjs create operator");
   const existing = deployment();
@@ -395,20 +426,32 @@ if (cmd === "status") {
         : `Contracts are already deployed on ${network} (${deploymentFile}), but their checks have not all passed.\nDo not deploy again. Run the checks:  node scripts/go-live.mjs verify`,
     );
   }
-  if (same(arg, operator) || same(arg, deployerAddress())) fail("The Safe must be a different address from the keys on this server.");
-  const safe = await readSafe(arg);
+  let safeAddress = arg;
+  if (oneStep) {
+    const deployer = deployerAddress();
+    if (!deployer) fail("No deployer key yet. Create it with: node scripts/keys.mjs create deployer");
+    // One question for both steps, asked before anything is sent.
+    await confirm(
+      "DEPLOY",
+      `This deploys the Ratinole contracts to Robinhood Chain MAINNET, with this server's deployer key as their admin:\n  1. a Safe is created, owned by the deployer key ${deployer}\n  2. the timelock (3-day delay, driven only by that Safe), the vault factory and the decision registry are deployed\n  Agent (operator and registry poster): ${operator}\n\nThe deployer key becomes your ADMIN key, for good:\n${ADMIN_KEY_RULES}\n\nIt cannot be undone. It costs a small network fee, paid by the deployer key.`,
+    );
+    safeAddress = await deployerSafe(deployer);
+  }
+  if (same(safeAddress, operator) || same(safeAddress, deployerAddress())) fail("The Safe must be a different address from the keys on this server.");
+  const safe = await readSafe(safeAddress);
   if (operatorOwns(safe.owners)) {
-    fail(`The Safe at ${arg} cannot be used as the admin.\n${serverKeyRefusal({ label: "agent's key (the operator)", address: operatorAddress() })}\nCreate a Safe owned by your own wallet:  node scripts/go-live.mjs safe 0xYourWallet${rehearsalFlag}`);
+    fail(`The Safe at ${safeAddress} cannot be used as the admin.\n${serverKeyRefusal({ label: "agent's key (the operator)", address: operatorAddress() })}\nCreate a Safe owned by your own wallet:  node scripts/go-live.mjs safe 0xYourWallet${rehearsalFlag}`);
   }
   // The deployer key as the Safe's owner is allowed only as its one owner, the way `safe deployer` makes it.
   const adminIsDeployer = deployerOwns(safe.owners);
-  if (adminIsDeployer && safe.owners.length !== 1) fail(`The Safe at ${arg} has this server's deployer key among several owners. Use a Safe whose owners are all wallets you hold yourself, or one made with:  node scripts/go-live.mjs safe deployer${rehearsalFlag}`);
-  if (adminIsDeployer) console.log(`\nThe Safe's owner is this server's deployer key. It is your ADMIN key, for good:\n${ADMIN_KEY_RULES}`);
-  await confirm(
+  if (adminIsDeployer && safe.owners.length !== 1) fail(`The Safe at ${safeAddress} has this server's deployer key among several owners. Use a Safe whose owners are all wallets you hold yourself, or one made with:  node scripts/go-live.mjs safe deployer${rehearsalFlag}`);
+  if (adminIsDeployer && !oneStep) console.log(`\nThe Safe's owner is this server's deployer key. It is your ADMIN key, for good:\n${ADMIN_KEY_RULES}`);
+  // In one step the question was asked above, before the Safe was made.
+  if (!oneStep) await confirm(
     "DEPLOY",
     `This deploys the Ratinole contracts to Robinhood Chain MAINNET.\n  Admin: your Safe ${arg}, behind a 3-day timelock\n    Safe owners (${safe.threshold} of ${safe.owners.length} must approve):\n      ${safe.owners.join("\n      ")}\n  Agent (operator and registry poster): ${operator}\nCheck that the owners above are wallets you control. It cannot be undone. It costs a small network fee, paid by the deployer key.`,
   );
-  if (!hardhat("deploy.js", { SAFE_ADDRESS: arg, OPERATOR_ADDRESS: operator, POSTER_ADDRESS: operator, ...(adminIsDeployer ? { ADMIN_KEY_IS_DEPLOYER: "1" } : {}), ...(mainnet ? { CONFIRM_MAINNET: "deploy-ratinole-mainnet" } : {}) })) {
+  if (!hardhat("deploy.js", { SAFE_ADDRESS: safeAddress, OPERATOR_ADDRESS: operator, POSTER_ADDRESS: operator, ...(adminIsDeployer ? { ADMIN_KEY_IS_DEPLOYER: "1" } : {}), ...(mainnet ? { CONFIRM_MAINNET: "deploy-ratinole-mainnet" } : {}) })) {
     fail(`That step failed. Read the message above.\nIf it printed contract addresses, the contracts exist: keep the addresses, do NOT deploy again, and run  node scripts/go-live.mjs verify${rehearsalFlag}`);
   }
   console.log(`\nDeployed. Live trading is still closed on the site. Check \`node scripts/go-live.mjs status${rehearsalFlag}\`, then open it with \`node scripts/go-live.mjs open${rehearsalFlag}\`.`);
