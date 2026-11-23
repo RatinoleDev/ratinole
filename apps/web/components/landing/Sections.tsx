@@ -1,5 +1,5 @@
 import type { DecisionDTO, ExampleDTO, MarketDTO } from "@rationale/config";
-import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY, GITHUB_URL, X_HANDLE, X_URL } from "@rationale/config";
+import { BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE, EXAMPLE_STRATEGY, GITHUB_URL, TELEGRAM_URL, X_HANDLE, X_URL } from "@rationale/config";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Chart, splitIndexOf } from "../Chart";
@@ -17,7 +17,7 @@ import {
   upDown,
   withoutLeadingAction,
 } from "../../lib/format";
-import { BrandMark, BrandWordmark, GitHubIcon, XIcon } from "../Brand";
+import { BrandMark, BrandWordmark, GitHubIcon, TelegramIcon, XIcon } from "../Brand";
 import { Crystal3D } from "./Crystal3D";
 import { TapeBody } from "./Tape";
 import { ThinkTabs } from "./ThinkTabs";
@@ -73,6 +73,9 @@ export function Nav({ base = "" }: { base?: string }) {
         <div className="top-cta">
           <a className="xlink" href={X_URL} target="_blank" rel="noopener noreferrer" aria-label={`${BRAND_NAME} on X`}>
             <XIcon />
+          </a>
+          <a className="xlink tg" href={TELEGRAM_URL} target="_blank" rel="noopener noreferrer" aria-label={`${BRAND_NAME} on Telegram`}>
+            <TelegramIcon />
           </a>
           <a className="xlink gh" href={GITHUB_URL} target="_blank" rel="noopener noreferrer" aria-label={`${BRAND_NAME} source code on GitHub`}>
             <GitHubIcon />
@@ -782,6 +785,10 @@ export function Footer() {
               <a className="xfollow" href={X_URL} target="_blank" rel="noopener noreferrer">
                 <XIcon size={14} />
                 Follow @{X_HANDLE}
+              </a>
+              <a className="xfollow" href={TELEGRAM_URL} target="_blank" rel="noopener noreferrer">
+                <TelegramIcon size={15} />
+                Join the Telegram
               </a>
               <a className="xfollow" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
                 <GitHubIcon size={15} />
