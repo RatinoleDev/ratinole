@@ -88,7 +88,7 @@ const lower = (a: string) => a.toLowerCase() as Address;
 type TokenConfig = readonly [boolean, number, number, number, Address];
 
 /** The contract's own refusal: its named error if it could be decoded, and whatever text came with it. */
-interface Revert {
+export interface Revert {
   errorName?: string;
   text: string;
 }
@@ -103,7 +103,7 @@ interface Revert {
  * is retried all hour and never recorded. So a revert is: a decoded contract error, or revert data, or the
  * node's own code 3, or the node's own words "execution reverted".
  */
-function contractRevert(err: unknown): Revert | null {
+export function contractRevert(err: unknown): Revert | null {
   if (!(err instanceof BaseError)) return null;
   const dressed = err.walk((e) => e instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
   const rpc = err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null;
@@ -121,14 +121,14 @@ function contractRevert(err: unknown): Revert | null {
  * What the node itself said in its JSON-RPC error, for matching its wording. Nothing else is looked at: the text
  * of a gateway's error page (an HTTP 502 or 503) proves nothing about what the chain did with a transaction.
  */
-const nodeWords = (err: BaseError) => (err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null)?.details ?? "";
-const NO_GAS_MONEY = /insufficient funds|insufficient balance|gas required exceeds allowance/i;
+export const nodeWords = (err: BaseError) => (err.walk((e) => e instanceof RpcRequestError) as RpcRequestError | null)?.details ?? "";
+export const NO_GAS_MONEY = /insufficient funds|insufficient balance|gas required exceeds allowance/i;
 
 /**
  * True when the network certainly refused a transaction outright, so it can never be mined. "Nonce too low" and
  * "already known" are NOT here: they are what a node answers when the same transaction already got through.
  */
-function refusedOutright(err: unknown): boolean {
+export function refusedOutright(err: unknown): boolean {
   if (!(err instanceof BaseError)) return false;
   // Only the node's own JSON-RPC answer counts as a refusal.
   if (!err.walk((e) => e instanceof RpcRequestError)) return false;
@@ -185,6 +185,23 @@ export interface ViemChainOptions {
   privateKey: Hex;
   /** How long to wait for a sent order to confirm before reporting it as pending. */
   confirmTimeoutMs?: number;
+  /**
+   * The queue orders are signed in. One key has one sequence of transaction numbers, so everything that signs with
+   * the same key must share one queue. Left out, this chain has a queue of its own.
+   */
+  inTurn?: InTurn;
+}
+
+/** Runs one thing at a time, in the order asked. */
+export type InTurn = <T>(fn: () => Promise<T>) => Promise<T>;
+
+export function turnQueue(): InTurn {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.then(fn, fn);
+    queue = run.catch(() => undefined);
+    return run;
+  };
 }
 
 export function viemVaultChain(opts: ViemChainOptions): VaultChain {
@@ -201,12 +218,7 @@ export function viemVaultChain(opts: ViemChainOptions): VaultChain {
   const wallet = createWalletClient({ account, chain, transport });
 
   // One order at a time: the operator has one sequence of transaction numbers.
-  let queue: Promise<unknown> = Promise.resolve();
-  const inTurn = <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = queue.then(fn, fn);
-    queue = run.catch(() => undefined);
-    return run;
-  };
+  const inTurn = opts.inTurn ?? turnQueue();
 
   /** The factory's own settings for each token: what an untouched vault has. Read once; they never change. */
   let defaults: Promise<Map<string, { feed: string; feeTier: number; maxStaleness: number }>> | null = null;

@@ -39,6 +39,9 @@ export const MEME_FACTORY_ABI = ${JSON.stringify(read("MemeVaultFactory", "meme"
 
 export const MEME_VENUE_ABI = ${JSON.stringify(read("IMemeVenue", "meme"))} as const;
 
+/** What the pons venue can refuse with, so that a refusal coming up through a vault has a name. */
+export const PONS_VENUE_ERRORS_ABI = ${JSON.stringify(read("PonsVenue", "meme").filter((f) => f.type === "error"))} as const;
+
 /** The pons v2 launch factory: the one function the app reads, the record of a launch. */
 export const PONS_FACTORY_ABI = ${JSON.stringify(readFrom("PonsVenue", "IPonsFactory", "meme").filter((f) => f.name === "getLaunchedToken"))} as const;
 `;

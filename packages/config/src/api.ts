@@ -286,4 +286,108 @@ export interface ChainConfigDTO {
     defaultSlippageBps: number;
     defaultDailyLimitUsd: number;
   };
+  /** Meme vaults (launchpad tokens against ETH); absent or null while their contracts are not deployed and set. */
+  meme?: MemeConfigDTO | null;
+}
+
+export interface MemeConfigDTO {
+  /** The meme vault factory. */
+  factory: string;
+  /** The one venue this site trades on: an owner allows each token on it. */
+  venue: string;
+  /** False while the owner has paused meme trading: vaults can still be seen and withdrawn from. */
+  trading: boolean;
+  limits: { minBuyEth: number; maxBuyEth: number | null; defaultDailyBuyLimitEth: number };
+}
+
+/** Where a launch trades right now. "moving": its curve sold out and its pool is being made; a moment at most. */
+export type MemePhaseDTO = "curve" | "moving" | "pool" | "rescued";
+
+/**
+ * A token as the chain describes it right now. Names and tickers are not unique and prove nothing: the address is
+ * the token. `supported` is false, with the reason, for anything the meme vault cannot trade.
+ */
+export interface MemeTokenDTO {
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  supported: boolean;
+  /** Why not, in plain words. */
+  unsupportedReason?: string;
+  launchpad: "Pons" | null;
+  phase: MemePhaseDTO | null;
+  /** Charged on every buy and every sale, in percent: the launchpad's fee, and the tax the token's creator set. */
+  feePct: number | null;
+  creatorTaxPct: number | null;
+  /** Before graduation: ETH the curve has collected and what it must collect to graduate. */
+  raisedEth: number | null;
+  graduationEth: number | null;
+  /** ETH for one token, from the curve's reserves; null in a pool (shown as a quote for an amount instead). */
+  priceEth: number | null;
+  /** The launch's own page. */
+  pageUrl: string | null;
+  /** The block all of this was read at. */
+  block: string;
+}
+
+/** What a buy of `ethIn` would return right now, from a dry run of the vault's own buy. */
+export interface MemeQuoteDTO {
+  ethIn: string;
+  tokensOut: string;
+  /** ETH the buy would actually use (less than asked when a curve is about to sell out). */
+  ethSpent: string;
+}
+
+export interface MemeVaultDTO {
+  address: string;
+  /** Wei, as decimal strings. */
+  ethWei: string;
+  dailyBuyLimitWei: string;
+  remainingDailyWei: string;
+  operatorOk: boolean;
+  paused: boolean;
+  tokens: { address: string; symbol: string; name: string; decimals: number; balanceRaw: string; budgetLeftWei: string; venueOk: boolean }[];
+}
+
+export type MemeAgentStage = "buying" | "holding" | "selling" | "sold" | "stopped";
+
+export interface MemeEventDTO {
+  id: string;
+  at: string;
+  /** "bought" | "sold" | "not bought" | "not sold" | "stopped" | "note" */
+  kind: string;
+  text: string;
+  txHash: string | null;
+}
+
+export interface MemeAgentDTO {
+  id: string;
+  name: string;
+  vault: string;
+  token: string;
+  symbol: string;
+  tokenName: string;
+  decimals: number;
+  status: "active" | "paused" | "done" | "archived";
+  stage: MemeAgentStage;
+  pausedReason: string | null;
+  buyWei: string;
+  takeProfitPct: number | null;
+  stopLossPct: number | null;
+  /** From the vault's own events: ETH spent on the buy, tokens received, ETH received from the sale. */
+  spentWei: string;
+  tokensRaw: string;
+  receivedWei: string;
+  /** What selling everything would have returned right after the buy: the base the two exits are measured from. */
+  entryValueWei: string | null;
+  /** What selling everything would return, at the last look. */
+  lastValueWei: string | null;
+  lastCheckedAt: string | null;
+  /** Why the last look could not value the position, if it could not. */
+  lastCheckNote: string | null;
+  exitKind: string | null;
+  launchedAt: string;
+  closedAt: string | null;
+  events: MemeEventDTO[];
 }

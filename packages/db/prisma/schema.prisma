@@ -20,6 +20,7 @@ model User {
   sessions        Session[]
   agents          Agent[]
   backtests       Backtest[]
+  memeAgents      MemeAgent[]
 }
 
 model Session {
@@ -306,4 +307,100 @@ model MarketSnapshot {
 
   @@id([market, hour])
   @@index([hour])
+}
+
+/// A meme agent: buy one launchpad token with a set amount of ETH from the owner's meme vault, then sell it all
+/// when it is up by the take profit or down by the stop loss. Amounts are wei or raw token units, as decimal
+/// strings, and come from the vault's own events.
+model MemeAgent {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  /// Lower-case 0x addresses.
+  vault         String
+  token         String
+  /// As the token contract answered when the agent was launched. Names and tickers are not unique; `token` is.
+  symbol        String
+  tokenName     String
+  decimals      Int
+  /// ETH to buy with.
+  buyWei        String
+  /// Percent, measured from what selling everything would have returned right after the buy. Null = no such exit.
+  takeProfitPct Float?
+  stopLossPct   Float?
+  /// "active" | "paused" | "done" | "archived" (deleted by the owner; its events are kept)
+  status        String      @default("active")
+  /// "buying" | "holding" | "selling" | "sold" | "stopped"
+  stage         String      @default("buying")
+  /// Why the engine stopped it, or the owner paused it, in plain words.
+  pausedReason  String?
+  spentWei      String      @default("0")
+  tokensRaw     String      @default("0")
+  receivedWei   String      @default("0")
+  /// What selling everything would have returned right after the buy: the base both exits are measured from.
+  entryValueWei String?
+  /// The last look: what selling everything would return, or why that could not be worked out.
+  lastValueWei  String?
+  lastCheckedAt DateTime?
+  lastCheckNote String?
+  /// Buys the market refused in a row. Reset by a fill or by the owner resuming.
+  buyTries      Int         @default(0)
+  /// Set when the owner asked for the position to be sold now.
+  sellRequested Boolean     @default(false)
+  /// "take profit" | "stop loss" | "sold by owner"
+  exitKind      String?
+  launchedAt    DateTime    @default(now())
+  closedAt      DateTime?
+  archivedAt    DateTime?
+  updatedAt     DateTime    @updatedAt
+  orders        MemeOrder[]
+  events        MemeEvent[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([vault, token])
+}
+
+/// One on-chain order of a meme agent. The row is written, with the order's hash, before the order is sent, so a
+/// crash or a retry can never send it twice and it can always be found again.
+model MemeOrder {
+  id         String    @id @default(cuid())
+  agentId    String
+  agent      MemeAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  /// "buy" | "sell"
+  side       String
+  /// Wei for a buy, raw token units for a sale.
+  amountIn   String
+  /// "pending" (signed, maybe sent) | "done" | "failed"
+  status     String    @default("pending")
+  txHash     String?   @unique
+  /// Unix seconds after which the vault refuses this order.
+  deadline   Int
+  /// What the vault's own event says the order did.
+  ethWei     String?
+  tokensRaw  String?
+  minedBlock String?
+  error      String?
+  /// For a sale: which exit asked for it.
+  exitKind   String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([agentId, status])
+}
+
+/// What a meme agent did and why, in the order it happened. Every number in `text` is also in `detail`.
+model MemeEvent {
+  id        String    @id @default(cuid())
+  agentId   String
+  agent     MemeAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  at        DateTime  @default(now())
+  /// "bought" | "sold" | "not bought" | "not sold" | "stopped" | "note"
+  kind      String
+  text      String
+  txHash    String?
+  detail    Json?
+
+  @@index([agentId, at])
 }
